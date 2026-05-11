@@ -2,13 +2,13 @@
 
 [![](https://img.shields.io/badge/TgChat-@XrayR讨论-blue.svg)](https://t.me/XrayR_project)
 [![](https://img.shields.io/badge/Channel-@XrayR通知-blue.svg)](https://t.me/XrayR_channel)
-![](https://img.shields.io/github/stars/XrayR-project/XrayR)
-![](https://img.shields.io/github/forks/XrayR-project/XrayR)
-![](https://github.com/XrayR-project/XrayR/actions/workflows/release.yml/badge.svg)
-![](https://github.com/XrayR-project/XrayR/actions/workflows/docker.yml/badge.svg)
-[![Github All Releases](https://img.shields.io/github/downloads/XrayR-project/XrayR/total.svg)]()
+![](https://img.shields.io/github/stars/vahiru/XrayR)
+![](https://img.shields.io/github/forks/vahiru/XrayR)
+![](https://github.com/vahiru/XrayR/actions/workflows/release.yml/badge.svg)
+![](https://github.com/vahiru/XrayR/actions/workflows/docker.yml/badge.svg)
+[![Github All Releases](https://img.shields.io/github/downloads/vahiru/XrayR/total.svg)]()
 
-[Iranian(farsi) README](https://github.com/XrayR-project/XrayR/blob/master/README_Fa.md), [Vietnamese(vi) README](https://github.com/XrayR-project/XrayR/blob/master/README-vi.md), [English(en) README](https://github.com/XrayR-project/XrayR/blob/master/README-en.md)
+[Iranian(farsi) README](https://github.com/vahiru/XrayR/blob/master/README_Fa.md), [Vietnamese(vi) README](https://github.com/vahiru/XrayR/blob/master/README-vi.md), [English(en) README](https://github.com/vahiru/XrayR/blob/master/README-en.md)
 
 یک فریمورک بک اند مبتنی بر xray که از چند از پنل پشتیبانی می کند
 
@@ -16,7 +16,7 @@
 
 اگر این پروژه را دوست دارید، می توانید با کلیک بر روی ستاره+ساعت در گوشه بالا سمت راست به ادامه روند پیشرفت این پروژه توجه کنید.
 
-آموزش：[اموزش با جزئیات](https://xrayr-project.github.io/XrayR-doc/)
+آموزش：[اموزش با جزئیات](https://github.com/vahiru/XrayR)
 
 ## سلب مسئولیت
 
@@ -66,20 +66,20 @@
 ### نصب بصورت یکپارچه
 
 ```
-wget -N https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/vahiru/XrayR-release/master/install.sh && bash install.sh
 ```
 
 ### استقرار نرم افزار با استفاده از Docker
 
-[آموزش استقرار داکر](https://xrayr-project.github.io/XrayR-doc/xrayr-xia-zai-he-an-zhuang/install/docker)
+[آموزش استقرار داکر](https://github.com/vahiru/XrayR-release#docker-%E5%AE%89%E8%A3%85)
 
 ### نصب دستی
 
-[آموزش نصب دستی](https://xrayr-project.github.io/XrayR-doc/xrayr-xia-zai-he-an-zhuang/install/manual)
+[آموزش نصب دستی](https://github.com/vahiru/XrayR-release)
 
 ## فایل های پیکربندی و آموزش های با جرئیات
 
-[آموزش مفصل](https://xrayr-project.github.io/XrayR-doc/)
+[آموزش مفصل](https://github.com/vahiru/XrayR)
 
 ## Thanks
 
@@ -90,7 +90,7 @@ wget -N https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/ins
 
 ## Licence
 
-[Mozilla Public License Version 2.0](https://github.com/XrayR-project/XrayR/blob/master/LICENSE)
+[Mozilla Public License Version 2.0](https://github.com/vahiru/XrayR/blob/master/LICENSE)
 
 ## Telgram
 
@@ -100,6 +100,6 @@ wget -N https://raw.githubusercontent.com/XrayR-project/XrayR-release/master/ins
 
 ## Stargazers over time
 
-[![Stargazers over time](https://starchart.cc/XrayR-project/XrayR.svg)](https://starchart.cc/XrayR-project/XrayR)
+[![Stargazers over time](https://starchart.cc/vahiru/XrayR.svg)](https://starchart.cc/vahiru/XrayR)
 
 
