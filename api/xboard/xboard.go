@@ -57,6 +57,10 @@ type APIClient struct {
 	handshakeErr  error
 	wsStarted     atomic.Bool
 	wsStop        func()
+	wsMu          sync.RWMutex
+	wsWriteCh     chan<- wsMessage
+	lastStatus    map[string]interface{}
+	lastDevices   map[int][]string
 }
 
 func New(apiConfig *api.Config) *APIClient {
@@ -179,6 +183,12 @@ func (c *APIClient) GetUserList() (*[]api.UserInfo, error) {
 }
 
 func (c *APIClient) ReportNodeStatus(nodeStatus *api.NodeStatus) error {
+	payload := c.nodeStatusPayload(nodeStatus)
+	c.sendWS("node.status", payload)
+	return c.postReport(payload)
+}
+
+func (c *APIClient) nodeStatusPayload(nodeStatus *api.NodeStatus) map[string]interface{} {
 	vm, _ := mem.VirtualMemory()
 	sm, _ := mem.SwapMemory()
 	du, _ := disk.Usage("/")
@@ -203,20 +213,29 @@ func (c *APIClient) ReportNodeStatus(nodeStatus *api.NodeStatus) error {
 			"uptime": nodeStatus.Uptime,
 		},
 	}
-	return c.postReport(payload)
+	c.wsMu.Lock()
+	c.lastStatus = cloneAnyMap(payload)
+	c.wsMu.Unlock()
+	return payload
 }
 
 func (c *APIClient) ReportNodeOnlineUsers(onlineUsers *[]api.OnlineUser) error {
 	alive := make(map[string][]string)
 	online := make(map[string]int)
+	devices := make(map[int][]string)
 	for _, onlineUser := range *onlineUsers {
 		uid := strconv.Itoa(onlineUser.UID)
 		alive[uid] = append(alive[uid], onlineUser.IP)
 		online[uid] = len(alive[uid])
+		devices[onlineUser.UID] = append(devices[onlineUser.UID], onlineUser.IP)
 	}
 	if len(alive) == 0 {
 		return nil
 	}
+	c.wsMu.Lock()
+	c.lastDevices = cloneDeviceMap(devices)
+	c.wsMu.Unlock()
+	c.sendWS("report.devices", c.deviceReportPayload(devices))
 	return c.postReport(map[string]interface{}{
 		"alive":  alive,
 		"online": online,

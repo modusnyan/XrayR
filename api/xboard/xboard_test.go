@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/XrayR-project/XrayR/api"
+	"github.com/gorilla/websocket"
 )
 
 func TestXboardClientNodeUsersAndReport(t *testing.T) {
@@ -111,5 +114,97 @@ func TestXboardClientNodeUsersAndReport(t *testing.T) {
 	}
 	if _, ok := reportPayload["traffic"]; !ok {
 		t.Fatalf("traffic missing from report: %#v", reportPayload)
+	}
+}
+
+func TestXboardClientReportsDevicesOverWebSocket(t *testing.T) {
+	deviceReport := make(chan json.RawMessage, 1)
+	connected := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("token"); got != "token" {
+			t.Fatalf("ws token = %q", got)
+		}
+		if got := r.URL.Query().Get("node_id"); got != "7" {
+			t.Fatalf("ws node_id = %q", got)
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if err := conn.WriteJSON(wsMessage{Event: "auth.success"}); err != nil {
+			t.Fatal(err)
+		}
+		close(connected)
+		for {
+			var msg wsMessage
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			if msg.Event == wsEventReportDevices {
+				deviceReport <- msg.Data
+				return
+			}
+		}
+	}))
+	defer wsServer.Close()
+	wsURL := "ws" + strings.TrimPrefix(wsServer.URL, "http")
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/server/handshake":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"websocket": map[string]interface{}{"enabled": true, "ws_url": wsURL},
+				"settings":  map[string]interface{}{"push_interval": 15, "pull_interval": 30},
+			})
+		case "/api/v1/server/UniProxy/config":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"protocol":    "vless",
+				"server_port": 443,
+				"network":     "tcp",
+			})
+		case "/api/v2/server/report":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer apiServer.Close()
+
+	client := New(&api.Config{
+		APIHost:     apiServer.URL,
+		NodeID:      7,
+		Key:         "token",
+		NodeType:    "Vless",
+		EnableVless: true,
+		Timeout:     1,
+	})
+	defer client.Close()
+
+	if _, err := client.GetNodeInfo(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("websocket did not connect")
+	}
+	err := client.ReportNodeOnlineUsers(&[]api.OnlineUser{{UID: 1, IP: "1.1.1.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case raw := <-deviceReport:
+		var devices map[string][]string
+		if err := json.Unmarshal(raw, &devices); err != nil {
+			t.Fatal(err)
+		}
+		if len(devices["1"]) != 1 || devices["1"][0] != "1.1.1.1" {
+			t.Fatalf("unexpected devices payload: %s", raw)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("device report was not sent over websocket")
 	}
 }

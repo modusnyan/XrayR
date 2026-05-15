@@ -19,6 +19,7 @@ const (
 	wsEventSyncUsers     = "sync.users"
 	wsEventSyncUserDelta = "sync.user.delta"
 	wsEventSyncDevices   = "sync.devices"
+	wsEventReportDevices = "report.devices"
 )
 
 type wsMessage struct {
@@ -109,6 +110,17 @@ func (c *APIClient) connectWS(ctx context.Context, wsURL string) error {
 	conn.SetReadLimit(10 << 20)
 
 	writeCh := make(chan wsMessage, 16)
+	c.wsMu.Lock()
+	c.wsWriteCh = writeCh
+	c.wsMu.Unlock()
+	defer func() {
+		c.wsMu.Lock()
+		if c.wsWriteCh == writeCh {
+			c.wsWriteCh = nil
+		}
+		c.wsMu.Unlock()
+	}()
+
 	done := make(chan struct{})
 	var writeMu sync.Mutex
 	defer close(done)
@@ -131,6 +143,8 @@ func (c *APIClient) connectWS(ctx context.Context, wsURL string) error {
 			}
 		}
 	}()
+
+	c.sendLastWSState()
 
 	statusTicker := time.NewTicker(10 * time.Second)
 	defer statusTicker.Stop()
@@ -158,11 +172,48 @@ func (c *APIClient) connectWS(ctx context.Context, wsURL string) error {
 		case err := <-errCh:
 			return fmt.Errorf("read: %w", err)
 		case <-statusTicker.C:
-			select {
-			case writeCh <- wsMessage{Event: "node.status", Timestamp: time.Now().Unix()}:
-			default:
-			}
+			c.sendLastStatus()
 		}
+	}
+}
+
+func (c *APIClient) sendWS(event string, payload interface{}) bool {
+	c.wsMu.RLock()
+	writeCh := c.wsWriteCh
+	c.wsMu.RUnlock()
+	if writeCh == nil {
+		return false
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	msg := wsMessage{Event: event, Data: data, Timestamp: time.Now().Unix()}
+	select {
+	case writeCh <- msg:
+		return true
+	default:
+		log.Debugf("Xboard websocket write channel full, skip %s", event)
+		return false
+	}
+}
+
+func (c *APIClient) sendLastWSState() {
+	c.sendLastStatus()
+	c.wsMu.RLock()
+	devices := cloneDeviceMap(c.lastDevices)
+	c.wsMu.RUnlock()
+	if len(devices) > 0 {
+		c.sendWS(wsEventReportDevices, c.deviceReportPayload(devices))
+	}
+}
+
+func (c *APIClient) sendLastStatus() {
+	c.wsMu.RLock()
+	status := cloneAnyMap(c.lastStatus)
+	c.wsMu.RUnlock()
+	if len(status) > 0 {
+		c.sendWS("node.status", status)
 	}
 }
 
@@ -215,6 +266,42 @@ func (c *APIClient) handleWSMessage(msg wsMessage, writeCh chan<- wsMessage) {
 		// multi-node device state needs a deeper limiter integration.
 		return
 	}
+}
+
+func (c *APIClient) deviceReportPayload(devices map[int][]string) interface{} {
+	if c.MachineID > 0 && c.NodeID > 0 {
+		return map[string]interface{}{
+			"node_id": c.NodeID,
+			"devices": devices,
+		}
+	}
+	return devices
+}
+
+func cloneDeviceMap(src map[int][]string) map[int][]string {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[int][]string, len(src))
+	for uid, ips := range src {
+		if len(ips) == 0 {
+			out[uid] = nil
+			continue
+		}
+		out[uid] = append([]string(nil), ips...)
+	}
+	return out
+}
+
+func cloneAnyMap(src map[string]interface{}) map[string]interface{} {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 func (c *APIClient) applyUserDelta(action string, delta []user) {
