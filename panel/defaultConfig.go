@@ -5,6 +5,7 @@ import "github.com/XrayR-project/XrayR/service/controller"
 func getDefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		Level:      "none",
+		Format:     "text",
 		AccessPath: "",
 		ErrorPath:  "",
 	}

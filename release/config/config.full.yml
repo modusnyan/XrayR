@@ -1,0 +1,66 @@
+ConfigVersion: 1
+Log:
+  Level: info
+  Format: text
+  AccessPath: ""
+  ErrorPath: ""
+DnsConfigPath: ""
+RouteConfigPath: ""
+InboundConfigPath: ""
+OutboundConfigPath: ""
+ConnectionConfig:
+  Handshake: 4
+  ConnIdle: 30
+  UplinkOnly: 2
+  DownlinkOnly: 4
+  BufferSize: 64
+Diagnostics:
+  Enable: false
+  Listen: 127.0.0.1:8080
+Cache:
+  Enable: true
+  Path: cache
+  MaxAge: 86400
+Nodes:
+  - PanelType: Xboard
+    ApiConfig:
+      ApiHost: https://panel.example.com
+      ApiKey: CHANGE_ME
+      NodeID: 1
+      NodeType: Vless
+      Timeout: 30
+      EnableVless: true
+      VlessFlow: xtls-rprx-vision
+      SpeedLimit: 0
+      DeviceLimit: 0
+      RuleListPath: ""
+      DisableCustomConfig: false
+    ControllerConfig:
+      ListenIP: 0.0.0.0
+      SendIP: 0.0.0.0
+      UpdatePeriodic: 60
+      EnableDNS: false
+      DNSType: AsIs
+      DisableUploadTraffic: false
+      DisableGetRule: false
+      EnableProxyProtocol: false
+      EnableFallback: false
+      DisableIVCheck: false
+      DisableSniffing: false
+      DisableLocalREALITYConfig: false
+      EnableREALITY: false
+      AutoSpeedLimitConfig:
+        Limit: 0
+        WarnTimes: 0
+        LimitSpeed: 0
+        LimitDuration: 0
+      GlobalDeviceLimitConfig:
+        Enable: false
+        RedisNetwork: tcp
+        RedisAddr: 127.0.0.1:6379
+        RedisUsername: ""
+        RedisPassword: ""
+        RedisDB: 0
+        Timeout: 5
+        Expiry: 60
+      FallBackConfigs: []

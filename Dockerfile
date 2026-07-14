@@ -4,6 +4,10 @@ WORKDIR /app
 COPY . .
 ENV CGO_ENABLED=0
 RUN go mod download
+RUN go test ./...
+RUN go run . config check -c release/config/config.minimal.yml
+RUN go run . config check -c release/config/config.yml.example
+RUN go run . config check -c release/config/config.full.yml
 RUN go build -v -o XrayR -trimpath -ldflags "-s -w -buildid="
 
 # Release

@@ -16,17 +16,19 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/XrayR-project/XrayR/config"
+	"github.com/XrayR-project/XrayR/observability"
 	"github.com/XrayR-project/XrayR/panel"
 )
 
 var (
 	cfgFile string
 	rootCmd = &cobra.Command{
-		Use: "XrayR",
-		Run: func(cmd *cobra.Command, args []string) {
-			if err := run(); err != nil {
-				log.Fatal(err)
-			}
+		Use:           "XrayR",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return run()
 		},
 	}
 )
@@ -70,50 +72,97 @@ func getConfig() *viper.Viper {
 func run() error {
 	showVersion()
 
-	config := getConfig()
-	panelConfig := &panel.Config{}
-	if err := config.Unmarshal(panelConfig); err != nil {
-		return fmt.Errorf("Parse config file %v failed: %s \n", cfgFile, err)
+	configPath := resolveConfigPath()
+	result, err := config.Load(configPath)
+	if err != nil {
+		return err
 	}
-
-	if panelConfig.LogConfig.Level == "debug" {
-		log.SetReportCaller(true)
+	if result.HasErrors() {
+		_ = printIssues(os.Stderr, "text", result)
+		return fmt.Errorf("configuration is invalid")
 	}
+	panelConfig := result.Config
+	configureLogger(panelConfig.LogConfig)
+	setConfigEnvironment(configPath)
 
 	p := panel.New(panelConfig)
+	if err := p.Start(); err != nil {
+		return err
+	}
 	lastTime := time.Now()
-	config.OnConfigChange(func(e fsnotify.Event) {
-		// Discarding event received within a short period of time after receiving an event.
-		if time.Now().After(lastTime.Add(3 * time.Second)) {
-			// Hot reload function
-			fmt.Println("Config file changed:", e.Name)
-			p.Close()
-			// Delete old instance and trigger GC
-			runtime.GC()
-			if err := config.Unmarshal(panelConfig); err != nil {
-				log.Panicf("Parse config file %v failed: %s \n", cfgFile, err)
-			}
 
-			if panelConfig.LogConfig.Level == "debug" {
-				log.SetReportCaller(true)
-			}
-
-			p.Start()
-			lastTime = time.Now()
+	watcher := viper.New()
+	watcher.SetConfigFile(configPath)
+	if err := watcher.ReadInConfig(); err != nil {
+		return err
+	}
+	watcher.WatchConfig()
+	watcher.OnConfigChange(func(e fsnotify.Event) {
+		if !time.Now().After(lastTime.Add(3 * time.Second)) {
+			return
 		}
+		newResult, loadErr := config.Load(configPath)
+		if loadErr != nil || newResult.HasErrors() {
+			log.WithError(loadErr).Error("New configuration is invalid; continuing with the previous configuration")
+			if loadErr == nil {
+				_ = printIssues(os.Stderr, "text", newResult)
+			}
+			return
+		}
+
+		log.WithField("path", e.Name).Info("Configuration changed, applying validated configuration")
+		oldConfig := panelConfig
+		if err := p.Close(); err != nil {
+			log.WithError(err).Warn("Previous configuration did not close cleanly")
+		}
+		runtime.GC()
+		candidate := panel.New(newResult.Config)
+		configureLogger(newResult.Config.LogConfig)
+		if err := candidate.Start(); err != nil {
+			observability.Reloads.WithLabelValues("rollback").Inc()
+			log.WithError(err).Error("New configuration failed to start; rolling back to previous configuration")
+			rollback := panel.New(oldConfig)
+			if rollbackErr := rollback.Start(); rollbackErr != nil {
+				log.WithError(rollbackErr).Error("Rollback configuration failed to start")
+				return
+			}
+			p = rollback
+			panelConfig = oldConfig
+		} else {
+			observability.Reloads.WithLabelValues("success").Inc()
+			p = candidate
+			panelConfig = newResult.Config
+		}
+		lastTime = time.Now()
 	})
 
-	p.Start()
 	defer p.Close()
-
-	// Explicitly triggering GC to remove garbage from config loading.
 	runtime.GC()
-	// Running backend
 	osSignals := make(chan os.Signal, 1)
 	signal.Notify(osSignals, os.Interrupt, os.Kill, syscall.SIGTERM)
 	<-osSignals
-
 	return nil
+}
+
+func configureLogger(config *panel.LogConfig) {
+	if config == nil {
+		return
+	}
+	if strings.EqualFold(config.Format, "json") {
+		log.SetFormatter(&log.JSONFormatter{})
+	} else {
+		log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
+	}
+	if level, err := log.ParseLevel(config.Level); err == nil {
+		log.SetLevel(level)
+	}
+	log.SetReportCaller(strings.EqualFold(config.Level, "debug"))
+}
+
+func setConfigEnvironment(configPath string) {
+	configPath = path.Dir(configPath)
+	_ = os.Setenv("XRAY_LOCATION_ASSET", configPath)
+	_ = os.Setenv("XRAY_LOCATION_CONFIG", configPath)
 }
 
 func Execute() error {

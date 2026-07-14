@@ -1,3 +1,5 @@
+//go:build integration
+
 package bunpanel_test
 
 import (

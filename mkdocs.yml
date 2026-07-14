@@ -1,0 +1,25 @@
+site_name: XrayR Documentation
+site_description: XrayR configuration, diagnostics, and panel integration documentation
+repo_url: https://github.com/XrayR-project/XrayR
+site_url: https://xrayr-project.github.io/XrayR/
+docs_dir: docs
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - CLI: cli.md
+  - Diagnostics: diagnostics.md
+  - Observability: observability.md
+  - Migration and rollback: migration.md
+  - Troubleshooting: troubleshooting.md
+  - Backend usability roadmap: backend-usability-roadmap.md
+  - Panels:
+      - Overview: panels.md
+      - Xboard: dui-jie-xboard/xboard.md
+theme:
+  name: mkdocs
+markdown_extensions:
+  - admonition
+  - tables
+  - fenced_code
+strict: true

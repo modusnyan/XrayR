@@ -120,19 +120,17 @@ func (c *APIClient) assembleURL(path string) string {
 }
 
 func (c *APIClient) parseResponse(res *resty.Response, path string, err error) (*Response, error) {
-	if err != nil {
-		return nil, fmt.Errorf("request %s failed: %s", c.assembleURL(path), err)
+	statusCode := 0
+	if res != nil {
+		statusCode = res.StatusCode()
 	}
-
-	if res.StatusCode() > 400 {
-		body := res.Body()
-		return nil, fmt.Errorf("request %s failed: %s, %s", c.assembleURL(path), string(body), err)
+	if err != nil || statusCode >= 400 {
+		return nil, api.ClassifyError(path, "PMpanel", c.NodeID, statusCode, err)
 	}
 	response := res.Result().(*Response)
 
 	if response.Ret != 200 {
-		res, _ := json.Marshal(&response)
-		return nil, fmt.Errorf("ret %s invalid", string(res))
+		return nil, api.ClassifyError(path, "PMpanel", c.NodeID, statusCode, fmt.Errorf("invalid response status"))
 	}
 	return response, nil
 }

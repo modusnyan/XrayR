@@ -90,7 +90,7 @@ func (c *Controller) buildSSUser(userInfo *[]api.UserInfo, method string) (users
 				Level: 0,
 				Email: e,
 				Account: serial.ToTypedMessage(&shadowsocks_2022.Account{
-					Key:   userKey,
+					Key: userKey,
 				}),
 			}
 		} else {
@@ -123,7 +123,7 @@ func (c *Controller) buildSSPluginUser(userInfo *[]api.UserInfo) (users []*proto
 				Level: 0,
 				Email: e,
 				Account: serial.ToTypedMessage(&shadowsocks_2022.Account{
-					Key:   userKey,
+					Key: userKey,
 				}),
 			}
 		} else {
@@ -164,7 +164,7 @@ func (c *Controller) buildUserTag(user *api.UserInfo) string {
 }
 
 func (c *Controller) checkShadowsocksPassword(password string, method string) (string, error) {
-	if strings.Contains(c.panelType, "V2board") {
+	if c.capabilities.Shadowsocks2022KeyDerivation {
 		var userKey string
 		if len(password) < 16 {
 			return "", newError("shadowsocks2022 key's length must be greater than 16").AtWarning()

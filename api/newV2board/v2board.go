@@ -135,17 +135,17 @@ func (c *APIClient) assembleURL(path string) string {
 }
 
 func (c *APIClient) parseResponse(res *resty.Response, path string, err error) (*simplejson.Json, error) {
-	if err != nil {
-		return nil, fmt.Errorf("request %s failed: %v", c.assembleURL(path), err)
+	statusCode := 0
+	if res != nil {
+		statusCode = res.StatusCode()
 	}
-
-	if res.StatusCode() > 399 {
-		return nil, fmt.Errorf("request %s failed: %s, %v", c.assembleURL(path), res.String(), err)
+	if err != nil || statusCode >= 400 {
+		return nil, api.ClassifyError(path, "Xboard", c.NodeID, statusCode, err)
 	}
 
 	rtn, err := simplejson.NewJson(res.Body())
 	if err != nil {
-		return nil, fmt.Errorf("ret %s invalid", res.String())
+		return nil, api.ClassifyError(path, "Xboard", c.NodeID, statusCode, fmt.Errorf("invalid JSON response"))
 	}
 
 	return rtn, nil
@@ -377,8 +377,8 @@ func (c *APIClient) parseV2rayNodeResponse(s *serverConfig) (*api.NodeInfo, erro
 	} else {
 		dest = s.VlessTlsSettings.Sni
 	}
-	if s.VlessTlsSettings.xVer != 0 {
-		xVer = s.VlessTlsSettings.xVer
+	if s.VlessTlsSettings.Xver != 0 {
+		xVer = s.VlessTlsSettings.Xver
 	} else {
 		xVer = 0
 	}

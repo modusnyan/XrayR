@@ -1,12 +1,17 @@
-// Package service contains all the services used by XrayR
-// To implement a service, one needs to implement the interface below.
 package service
+
+import "github.com/XrayR-project/XrayR/service/diagnostics"
 
 // Service is the interface of all the services running in the panel
 type Service interface {
 	Start() error
 	Close() error
 	Restart
+}
+
+// StatusProvider exposes sanitized runtime state for diagnostics.
+type StatusProvider interface {
+	DiagnosticStatus() diagnostics.NodeStatus
 }
 
 // Restart the service

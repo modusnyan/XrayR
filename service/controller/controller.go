@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -19,6 +20,9 @@ import (
 	"github.com/XrayR-project/XrayR/app/mydispatcher"
 	"github.com/XrayR-project/XrayR/common/mylego"
 	"github.com/XrayR-project/XrayR/common/serverstatus"
+	"github.com/XrayR-project/XrayR/internal/snapshot"
+	"github.com/XrayR-project/XrayR/observability"
+	"github.com/XrayR-project/XrayR/service/diagnostics"
 )
 
 type LimitInfo struct {
@@ -28,24 +32,30 @@ type LimitInfo struct {
 }
 
 type Controller struct {
-	server       *core.Instance
-	config       *Config
-	clientInfo   api.ClientInfo
-	apiClient    api.API
-	nodeInfo     *api.NodeInfo
-	Tag          string
-	userList     *[]api.UserInfo
-	tasks        []periodicTask
-	limitedUsers map[api.UserInfo]LimitInfo
-	warnedUsers  map[api.UserInfo]int
-	panelType    string
-	ibm          inbound.Manager
-	obm          outbound.Manager
-	stm          stats.Manager
-	pm           policy.Manager
-	dispatcher   *mydispatcher.DefaultDispatcher
-	startAt      time.Time
-	logger       *log.Entry
+	stateMu       sync.RWMutex
+	closeOnce     sync.Once
+	server        *core.Instance
+	config        *Config
+	clientInfo    api.ClientInfo
+	apiClient     api.Client
+	nodeInfo      *api.NodeInfo
+	Tag           string
+	userList      *[]api.UserInfo
+	tasks         []periodicTask
+	limitedUsers  map[api.UserInfo]LimitInfo
+	warnedUsers   map[api.UserInfo]int
+	panelType     string
+	capabilities  api.PanelCapabilities
+	ibm           inbound.Manager
+	obm           outbound.Manager
+	stm           stats.Manager
+	pm            policy.Manager
+	dispatcher    *mydispatcher.DefaultDispatcher
+	startAt       time.Time
+	logger        *log.Entry
+	snapshotStore *snapshot.Store
+	lastSync      time.Time
+	lastError     string
 }
 
 type periodicTask struct {
@@ -54,24 +64,29 @@ type periodicTask struct {
 }
 
 // New return a Controller service with default parameters.
-func New(server *core.Instance, api api.API, config *Config, panelType string) *Controller {
+func New(server *core.Instance, client api.Client, config *Config, panelType string, capabilities api.PanelCapabilities) *Controller {
+	clientInfo := client.Describe()
 	logger := log.NewEntry(log.StandardLogger()).WithFields(log.Fields{
-		"Host": api.Describe().APIHost,
-		"Type": api.Describe().NodeType,
-		"ID":   api.Describe().NodeID,
+		"Host": clientInfo.APIHost,
+		"Type": clientInfo.NodeType,
+		"ID":   clientInfo.NodeID,
 	})
 	controller := &Controller{
-		server:     server,
-		config:     config,
-		apiClient:  api,
-		panelType:  panelType,
-		ibm:        server.GetFeature(inbound.ManagerType()).(inbound.Manager),
-		obm:        server.GetFeature(outbound.ManagerType()).(outbound.Manager),
-		stm:        server.GetFeature(stats.ManagerType()).(stats.Manager),
-		pm:         server.GetFeature(policy.ManagerType()).(policy.Manager),
-		dispatcher: server.GetFeature(mydispatcher.Type()).(*mydispatcher.DefaultDispatcher),
-		startAt:    time.Now(),
-		logger:     logger,
+		server:       server,
+		config:       config,
+		apiClient:    client,
+		panelType:    panelType,
+		capabilities: capabilities,
+		ibm:          server.GetFeature(inbound.ManagerType()).(inbound.Manager),
+		obm:          server.GetFeature(outbound.ManagerType()).(outbound.Manager),
+		stm:          server.GetFeature(stats.ManagerType()).(stats.Manager),
+		pm:           server.GetFeature(policy.ManagerType()).(policy.Manager),
+		dispatcher:   server.GetFeature(mydispatcher.Type()).(*mydispatcher.DefaultDispatcher),
+		startAt:      time.Now(),
+		logger:       logger,
+	}
+	if config.SnapshotPath != "" {
+		controller.snapshotStore = snapshot.New(config.SnapshotPath, clientInfo, time.Duration(config.SnapshotMaxAge)*time.Second)
 	}
 
 	return controller
@@ -80,108 +95,124 @@ func New(server *core.Instance, api api.API, config *Config, panelType string) *
 // Start implement the Start() function of the service interface
 func (c *Controller) Start() error {
 	c.clientInfo = c.apiClient.Describe()
-	// First fetch Node Info
-	newNodeInfo, err := c.apiClient.GetNodeInfo()
-	if err != nil {
-		return err
+	newNodeInfo, nodeErr := c.apiClient.GetNodeInfo()
+	var userInfo *[]api.UserInfo
+	var rules *[]api.DetectRule
+	if nodeErr == nil {
+		userInfo, nodeErr = c.apiClient.GetUserList()
 	}
-	if newNodeInfo.Port == 0 {
-		return errors.New("server port must > 0")
+	if nodeErr == nil && !c.config.DisableGetRule {
+		if provider, ok := c.apiClient.(api.RuleProvider); ok {
+			rules, _ = provider.GetNodeRule()
+		}
+	}
+	if nodeErr != nil && c.snapshotStore != nil {
+		var savedAt time.Time
+		newNodeInfo, userInfo, rules, savedAt, nodeErr = c.snapshotStore.Load()
+		if nodeErr == nil {
+			c.logger.WithField("saved_at", savedAt).Warn("Panel is unavailable; using the last valid snapshot")
+		}
+	}
+	if nodeErr != nil {
+		return nodeErr
+	}
+	if err := validateRuntimeSnapshot(newNodeInfo, userInfo); err != nil {
+		return err
 	}
 	c.nodeInfo = newNodeInfo
+	c.userList = userInfo
 	c.Tag = c.buildNodeTag()
 
-	// Add new tag
-	err = c.addNewTag(newNodeInfo)
-	if err != nil {
-		c.logger.Panic(err)
+	if err := c.addNewTag(newNodeInfo); err != nil {
 		return err
 	}
-	// Update user
-	userInfo, err := c.apiClient.GetUserList()
-	if err != nil {
+	if err := c.addNewUser(userInfo, newNodeInfo); err != nil {
+		_ = c.removeOldTag(c.Tag)
 		return err
 	}
-
-	// sync controller userList
-	c.userList = userInfo
-
-	err = c.addNewUser(userInfo, newNodeInfo)
-	if err != nil {
-		return err
-	}
-
-	// Add Limiter
 	if err := c.AddInboundLimiter(c.Tag, newNodeInfo.SpeedLimit, userInfo, c.config.GlobalDeviceLimitConfig); err != nil {
 		c.logger.Print(err)
 	}
-
-	// Add Rule Manager
-	if !c.config.DisableGetRule {
-		if ruleList, err := c.apiClient.GetNodeRule(); err != nil {
-			c.logger.Printf("Get rule list filed: %s", err)
-		} else if len(*ruleList) > 0 {
-			if err := c.UpdateRule(c.Tag, *ruleList); err != nil {
-				c.logger.Print(err)
-			}
+	if rules != nil && len(*rules) > 0 {
+		if err := c.UpdateRule(c.Tag, *rules); err != nil {
+			c.logger.Print(err)
+		}
+	}
+	if c.snapshotStore != nil {
+		if err := c.snapshotStore.Save(newNodeInfo, userInfo, rules); err != nil {
+			c.logger.WithError(err).Warn("Failed to save runtime snapshot")
 		}
 	}
 
-	// Init AutoSpeedLimitConfig
 	if c.config.AutoSpeedLimitConfig == nil {
-		c.config.AutoSpeedLimitConfig = &AutoSpeedLimitConfig{0, 0, 0, 0}
+		c.config.AutoSpeedLimitConfig = &AutoSpeedLimitConfig{}
 	}
 	if c.config.AutoSpeedLimitConfig.Limit > 0 {
 		c.limitedUsers = make(map[api.UserInfo]LimitInfo)
 		c.warnedUsers = make(map[api.UserInfo]int)
 	}
-
-	// Add periodic tasks
 	c.tasks = append(c.tasks,
-		periodicTask{
-			tag: "node monitor",
-			Periodic: &task.Periodic{
-				Interval: time.Duration(c.config.UpdatePeriodic) * time.Second,
-				Execute:  c.nodeInfoMonitor,
-			}},
-		periodicTask{
-			tag: "user monitor",
-			Periodic: &task.Periodic{
-				Interval: time.Duration(c.config.UpdatePeriodic) * time.Second,
-				Execute:  c.userInfoMonitor,
-			}},
+		periodicTask{tag: "node monitor", Periodic: &task.Periodic{Interval: time.Duration(c.config.UpdatePeriodic) * time.Second, Execute: c.nodeInfoMonitor}},
+		periodicTask{tag: "user monitor", Periodic: &task.Periodic{Interval: time.Duration(c.config.UpdatePeriodic) * time.Second, Execute: c.userInfoMonitor}},
 	)
-
-	// Check cert service in need
-	if c.nodeInfo.EnableTLS && c.config.EnableREALITY == false {
-		c.tasks = append(c.tasks, periodicTask{
-			tag: "cert monitor",
-			Periodic: &task.Periodic{
-				Interval: time.Duration(c.config.UpdatePeriodic) * time.Second * 60,
-				Execute:  c.certMonitor,
-			}})
+	if c.nodeInfo.EnableTLS && !c.config.EnableREALITY {
+		c.tasks = append(c.tasks, periodicTask{tag: "cert monitor", Periodic: &task.Periodic{Interval: time.Duration(c.config.UpdatePeriodic) * time.Minute, Execute: c.certMonitor}})
 	}
-
-	// Start periodic tasks
 	for i := range c.tasks {
 		c.logger.Printf("Start %s periodic task", c.tasks[i].tag)
 		go c.tasks[i].Start()
 	}
+	c.stateMu.Lock()
+	c.lastSync = time.Now()
+	c.lastError = ""
+	c.stateMu.Unlock()
+	observability.LastSync.WithLabelValues(c.panelType, c.nodeInfo.NodeType).Set(float64(time.Now().Unix()))
+	observability.Users.WithLabelValues(c.panelType, c.nodeInfo.NodeType).Set(float64(len(*c.userList)))
+	return nil
+}
 
+func validateRuntimeSnapshot(node *api.NodeInfo, users *[]api.UserInfo) error {
+	if node == nil || node.Port == 0 {
+		return errors.New("server port must be greater than zero")
+	}
+	if users == nil || len(*users) == 0 {
+		return errors.New("user list is empty")
+	}
 	return nil
 }
 
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
-	for i := range c.tasks {
-		if c.tasks[i].Periodic != nil {
-			if err := c.tasks[i].Periodic.Close(); err != nil {
-				c.logger.Panicf("%s periodic task close failed: %s", c.tasks[i].tag, err)
+	var closeErr error
+	c.closeOnce.Do(func() {
+		for i := range c.tasks {
+			if c.tasks[i].Periodic != nil {
+				if err := c.tasks[i].Periodic.Close(); err != nil && closeErr == nil {
+					closeErr = fmt.Errorf("%s periodic task close failed: %w", c.tasks[i].tag, err)
+				}
 			}
 		}
-	}
+		if closer, ok := c.apiClient.(api.Closer); ok {
+			if err := closer.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+		}
+	})
+	return closeErr
+}
 
-	return nil
+// DiagnosticStatus returns sanitized, low-cardinality runtime state.
+func (c *Controller) DiagnosticStatus() diagnostics.NodeStatus {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	users := 0
+	if c.userList != nil {
+		users = len(*c.userList)
+	}
+	return diagnostics.NodeStatus{
+		Panel: c.panelType, NodeID: c.clientInfo.NodeID, NodeType: c.clientInfo.NodeType,
+		Ready: c.nodeInfo != nil && c.Tag != "", Users: users, LastSync: c.lastSync, LastError: c.lastError,
+	}
 }
 
 func (c *Controller) nodeInfoMonitor() (err error) {
@@ -219,69 +250,89 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}
 	}
 
-	// If nodeInfo changed
+	// Apply a node change transactionally. Validate the complete replacement
+	// before removing the active tag, then rebuild the previous snapshot if any
+	// runtime operation fails.
 	if nodeInfoChanged {
-		if !reflect.DeepEqual(c.nodeInfo, newNodeInfo) {
-			// Remove old tag
-			oldTag := c.Tag
-			err := c.removeOldTag(oldTag)
-			if err != nil {
-				c.logger.Print(err)
+		c.stateMu.RLock()
+		currentNode := c.nodeInfo
+		c.stateMu.RUnlock()
+		if !reflect.DeepEqual(currentNode, newNodeInfo) {
+			if err := validateRuntimeSnapshot(newNodeInfo, newUserInfo); err != nil {
+				c.recordSyncError(err)
 				return nil
 			}
-			if c.nodeInfo.NodeType == "Shadowsocks-Plugin" {
-				err = c.removeOldTag(fmt.Sprintf("dokodemo-door_%s+1", c.Tag))
+			newTag := fmt.Sprintf("%s_%s_%d", newNodeInfo.NodeType, c.config.ListenIP, newNodeInfo.Port)
+			if newNodeInfo.NodeType != "Shadowsocks-Plugin" {
+				if _, err := InboundBuilder(c.config, newNodeInfo, newTag); err != nil {
+					c.recordSyncError(err)
+					return nil
+				}
+				if _, err := OutboundBuilder(c.config, newNodeInfo, newTag); err != nil {
+					c.recordSyncError(err)
+					return nil
+				}
 			}
-			if err != nil {
-				c.logger.Print(err)
+
+			c.stateMu.Lock()
+			oldNode, oldUsers, oldTag := c.nodeInfo, c.userList, c.Tag
+			if err := c.removeOldTag(oldTag); err != nil {
+				c.stateMu.Unlock()
+				c.recordSyncError(err)
 				return nil
 			}
-			// Add new tag
-			c.nodeInfo = newNodeInfo
-			c.Tag = c.buildNodeTag()
-			err = c.addNewTag(newNodeInfo)
-			if err != nil {
-				c.logger.Print(err)
+			_ = c.DeleteInboundLimiter(oldTag)
+			c.nodeInfo, c.userList, c.Tag = newNodeInfo, newUserInfo, newTag
+			applyErr := c.addNewTag(newNodeInfo)
+			if applyErr == nil {
+				applyErr = c.addNewUser(newUserInfo, newNodeInfo)
+			}
+			if applyErr == nil {
+				applyErr = c.AddInboundLimiter(newTag, newNodeInfo.SpeedLimit, newUserInfo, c.config.GlobalDeviceLimitConfig)
+			}
+			if applyErr != nil {
+				_ = c.removeOldTag(newTag)
+				_ = c.DeleteInboundLimiter(newTag)
+				c.nodeInfo, c.userList, c.Tag = oldNode, oldUsers, oldTag
+				rollbackErr := c.addNewTag(oldNode)
+				if rollbackErr == nil {
+					rollbackErr = c.addNewUser(oldUsers, oldNode)
+				}
+				if rollbackErr == nil {
+					rollbackErr = c.AddInboundLimiter(oldTag, oldNode.SpeedLimit, oldUsers, c.config.GlobalDeviceLimitConfig)
+				}
+				c.stateMu.Unlock()
+				if rollbackErr != nil {
+					c.recordSyncError(fmt.Errorf("apply failed: %v; rollback failed: %w", applyErr, rollbackErr))
+				} else {
+					c.recordSyncError(fmt.Errorf("new node configuration rejected and rolled back: %w", applyErr))
+				}
 				return nil
 			}
+			c.lastSync, c.lastError = time.Now(), ""
+			c.stateMu.Unlock()
 			nodeInfoChanged = true
-			// Remove Old limiter
-			if err = c.DeleteInboundLimiter(oldTag); err != nil {
-				c.logger.Print(err)
-				return nil
-			}
 		} else {
 			nodeInfoChanged = false
 		}
 	}
 
 	// Check Rule
-	if !c.config.DisableGetRule {
-		if ruleList, err := c.apiClient.GetNodeRule(); err != nil {
-			if err.Error() != api.RuleNotModified {
-				c.logger.Printf("Get rule list filed: %s", err)
-			}
-		} else if len(*ruleList) > 0 {
-			if err := c.UpdateRule(c.Tag, *ruleList); err != nil {
-				c.logger.Print(err)
+	if !c.config.DisableGetRule && c.capabilities.Rules {
+		if provider, ok := c.apiClient.(api.RuleProvider); ok {
+			if ruleList, err := provider.GetNodeRule(); err != nil {
+				if err.Error() != api.RuleNotModified {
+					c.logger.Printf("Get rule list failed: %s", err)
+				}
+			} else if len(*ruleList) > 0 {
+				if err := c.UpdateRule(c.Tag, *ruleList); err != nil {
+					c.logger.Print(err)
+				}
 			}
 		}
 	}
 
-	if nodeInfoChanged {
-		err = c.addNewUser(newUserInfo, newNodeInfo)
-		if err != nil {
-			c.logger.Print(err)
-			return nil
-		}
-
-		// Add Limiter
-		if err := c.AddInboundLimiter(c.Tag, newNodeInfo.SpeedLimit, newUserInfo, c.config.GlobalDeviceLimitConfig); err != nil {
-			c.logger.Print(err)
-			return nil
-		}
-
-	} else {
+	if !nodeInfoChanged {
 		var deleted, added []api.UserInfo
 		if usersChanged {
 			deleted, added = compareUserList(c.userList, newUserInfo)
@@ -309,7 +360,30 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.logger.Printf("%d user deleted, %d user added", len(deleted), len(added))
 	}
 	c.userList = newUserInfo
+	if c.snapshotStore != nil {
+		var rules *[]api.DetectRule
+		if !c.config.DisableGetRule {
+			if provider, ok := c.apiClient.(api.RuleProvider); ok {
+				rules, _ = provider.GetNodeRule()
+			}
+		}
+		if err := c.snapshotStore.Save(c.nodeInfo, c.userList, rules); err != nil {
+			c.logger.WithError(err).Warn("Failed to update runtime snapshot")
+		}
+	}
+	c.stateMu.Lock()
+	c.lastSync, c.lastError = time.Now(), ""
+	c.stateMu.Unlock()
+	observability.LastSync.WithLabelValues(c.panelType, c.nodeInfo.NodeType).Set(float64(time.Now().Unix()))
+	observability.Users.WithLabelValues(c.panelType, c.nodeInfo.NodeType).Set(float64(len(*c.userList)))
 	return nil
+}
+
+func (c *Controller) recordSyncError(err error) {
+	c.stateMu.Lock()
+	c.lastError = err.Error()
+	c.stateMu.Unlock()
+	c.logger.WithError(err).Warn("Node synchronization failed; keeping the last valid runtime snapshot")
 }
 
 func (c *Controller) removeOldTag(oldTag string) (err error) {
@@ -481,27 +555,21 @@ func limitUser(c *Controller, user api.UserInfo, silentUsers *[]api.UserInfo) {
 }
 
 func (c *Controller) userInfoMonitor() (err error) {
-	// delay to start
 	if time.Since(c.startAt) < time.Duration(c.config.UpdatePeriodic)*time.Second {
 		return nil
 	}
 
-	// Get server status
-	CPU, Mem, Disk, Uptime, err := serverstatus.GetSystemInfo()
-	if err != nil {
-		c.logger.Print(err)
+	if c.capabilities.NodeStatusReport {
+		if reporter, ok := c.apiClient.(api.NodeStatusReporter); ok {
+			CPU, Mem, Disk, Uptime, statusErr := serverstatus.GetSystemInfo()
+			if statusErr != nil {
+				c.logger.Print(statusErr)
+			} else if statusErr = reporter.ReportNodeStatus(&api.NodeStatus{CPU: CPU, Mem: Mem, Disk: Disk, Uptime: Uptime}); statusErr != nil {
+				c.logger.Print(statusErr)
+			}
+		}
 	}
-	err = c.apiClient.ReportNodeStatus(
-		&api.NodeStatus{
-			CPU:    CPU,
-			Mem:    Mem,
-			Disk:   Disk,
-			Uptime: Uptime,
-		})
-	if err != nil {
-		c.logger.Print(err)
-	}
-	// Unlock users
+
 	if c.config.AutoSpeedLimitConfig.Limit > 0 && len(c.limitedUsers) > 0 {
 		c.logger.Printf("Limited users:")
 		toReleaseUsers := make([]api.UserInfo, 0)
@@ -522,7 +590,6 @@ func (c *Controller) userInfoMonitor() (err error) {
 		}
 	}
 
-	// Get User traffic
 	var userTraffic []api.UserTraffic
 	var upCounterList []stats.Counter
 	var downCounterList []stats.Counter
@@ -536,14 +603,13 @@ func (c *Controller) userInfoMonitor() (err error) {
 			c.logger.Printf("Traffic counted: tag=%s up=%d down=%d", userTag, up, down)
 		}
 		if up > 0 || down > 0 {
-			// Over speed users
 			if AutoSpeedLimit > 0 {
 				if down > AutoSpeedLimit*1000000*UpdatePeriodic/8 || up > AutoSpeedLimit*1000000*UpdatePeriodic/8 {
 					if _, ok := c.limitedUsers[user]; !ok {
 						if c.config.AutoSpeedLimitConfig.WarnTimes == 0 {
 							limitUser(c, user, &limitedUsers)
 						} else {
-							c.warnedUsers[user] += 1
+							c.warnedUsers[user]++
 							if c.warnedUsers[user] > c.config.AutoSpeedLimitConfig.WarnTimes {
 								limitUser(c, user, &limitedUsers)
 								delete(c.warnedUsers, user)
@@ -554,12 +620,7 @@ func (c *Controller) userInfoMonitor() (err error) {
 					delete(c.warnedUsers, user)
 				}
 			}
-			userTraffic = append(userTraffic, api.UserTraffic{
-				UID:      user.UID,
-				Email:    user.Email,
-				Upload:   up,
-				Download: down})
-
+			userTraffic = append(userTraffic, api.UserTraffic{UID: user.UID, Email: user.Email, Upload: up, Download: down})
 			if upCounter != nil {
 				upCounterList = append(upCounterList, upCounter)
 			}
@@ -576,40 +637,53 @@ func (c *Controller) userInfoMonitor() (err error) {
 		}
 	}
 	if len(userTraffic) > 0 {
-		c.logger.Printf("Reporting %d user(s) traffic to panel; example: UID=%d up=%d down=%d", len(userTraffic), userTraffic[0].UID, userTraffic[0].Upload, userTraffic[0].Download)
-		var err error // Define an empty error
-		if !c.config.DisableUploadTraffic {
-			err = c.apiClient.ReportUserTraffic(&userTraffic)
+		c.logger.Printf("Reporting %d user(s) traffic to panel", len(userTraffic))
+		var reportErr error
+		if c.capabilities.TrafficReport {
+			if reporter, ok := c.apiClient.(api.TrafficReporter); ok {
+				if !c.config.DisableUploadTraffic {
+					reportErr = reporter.ReportUserTraffic(&userTraffic)
+				}
+			} else if !c.config.DisableUploadTraffic {
+				reportErr = errors.New("panel does not implement its declared traffic reporting capability")
+			}
+		} else if !c.config.DisableUploadTraffic {
+			reportErr = errors.New("panel does not support traffic reporting")
 		}
-		// If report traffic error, not clear the traffic
-		if err != nil {
-			c.logger.Print(err)
+		if reportErr != nil {
+			observability.TrafficFailures.WithLabelValues(c.panelType).Inc()
+			c.logger.Print(reportErr)
 		} else {
 			c.resetTraffic(&upCounterList, &downCounterList)
 		}
 	}
 
-	// Report Online info
-	if onlineDevice, err := c.GetOnlineDevice(c.Tag); err != nil {
-		c.logger.Print(err)
-	} else if len(*onlineDevice) > 0 {
-		if err = c.apiClient.ReportNodeOnlineUsers(onlineDevice); err != nil {
-			c.logger.Print(err)
-		} else {
-			c.logger.Printf("Report %d online users", len(*onlineDevice))
+	if c.capabilities.OnlineUserReport {
+		if reporter, ok := c.apiClient.(api.OnlineUserReporter); ok {
+			if onlineDevice, onlineErr := c.GetOnlineDevice(c.Tag); onlineErr != nil {
+				c.logger.Print(onlineErr)
+			} else if len(*onlineDevice) > 0 {
+				if onlineErr = reporter.ReportNodeOnlineUsers(onlineDevice); onlineErr != nil {
+					c.logger.Print(onlineErr)
+				} else {
+					c.logger.Printf("Report %d online users", len(*onlineDevice))
+				}
+			}
 		}
 	}
 
-	// Report Illegal user
-	if detectResult, err := c.GetDetectResult(c.Tag); err != nil {
-		c.logger.Print(err)
-	} else if len(*detectResult) > 0 {
-		if err = c.apiClient.ReportIllegal(detectResult); err != nil {
-			c.logger.Print(err)
-		} else {
-			c.logger.Printf("Report %d illegal behaviors", len(*detectResult))
+	if c.capabilities.IllegalReport {
+		if reporter, ok := c.apiClient.(api.IllegalReporter); ok {
+			if detectResult, detectErr := c.GetDetectResult(c.Tag); detectErr != nil {
+				c.logger.Print(detectErr)
+			} else if len(*detectResult) > 0 {
+				if detectErr = reporter.ReportIllegal(detectResult); detectErr != nil {
+					c.logger.Print(detectErr)
+				} else {
+					c.logger.Printf("Report %d illegal behaviors", len(*detectResult))
+				}
+			}
 		}
-
 	}
 	return nil
 }

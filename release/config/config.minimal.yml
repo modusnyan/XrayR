@@ -1,0 +1,11 @@
+ConfigVersion: 1
+Log:
+  Level: info
+  Format: text
+Nodes:
+  - PanelType: Xboard
+    ApiConfig:
+      ApiHost: https://panel.example.com
+      ApiKey: CHANGE_ME
+      NodeID: 1
+      NodeType: Vless

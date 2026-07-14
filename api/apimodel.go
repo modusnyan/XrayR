@@ -15,17 +15,17 @@ const (
 
 // Config API config
 type Config struct {
-	APIHost             string  `mapstructure:"ApiHost"`
-	NodeID              int     `mapstructure:"NodeID"`
-	Key                 string  `mapstructure:"ApiKey"`
-	NodeType            string  `mapstructure:"NodeType"`
-	EnableVless         bool    `mapstructure:"EnableVless"`
-	VlessFlow           string  `mapstructure:"VlessFlow"`
-	Timeout             int     `mapstructure:"Timeout"`
-	SpeedLimit          float64 `mapstructure:"SpeedLimit"`
-	DeviceLimit         int     `mapstructure:"DeviceLimit"`
-	RuleListPath        string  `mapstructure:"RuleListPath"`
-	DisableCustomConfig bool    `mapstructure:"DisableCustomConfig"`
+	APIHost             string  `mapstructure:"ApiHost" json:"ApiHost" yaml:"ApiHost"`
+	NodeID              int     `mapstructure:"NodeID" json:"NodeID" yaml:"NodeID"`
+	Key                 string  `mapstructure:"ApiKey" json:"ApiKey" yaml:"ApiKey"`
+	NodeType            string  `mapstructure:"NodeType" json:"NodeType" yaml:"NodeType"`
+	EnableVless         bool    `mapstructure:"EnableVless" json:"EnableVless" yaml:"EnableVless"`
+	VlessFlow           string  `mapstructure:"VlessFlow" json:"VlessFlow,omitempty" yaml:"VlessFlow,omitempty"`
+	Timeout             int     `mapstructure:"Timeout" json:"Timeout" yaml:"Timeout"`
+	SpeedLimit          float64 `mapstructure:"SpeedLimit" json:"SpeedLimit" yaml:"SpeedLimit"`
+	DeviceLimit         int     `mapstructure:"DeviceLimit" json:"DeviceLimit" yaml:"DeviceLimit"`
+	RuleListPath        string  `mapstructure:"RuleListPath" json:"RuleListPath,omitempty" yaml:"RuleListPath,omitempty"`
+	DisableCustomConfig bool    `mapstructure:"DisableCustomConfig" json:"DisableCustomConfig" yaml:"DisableCustomConfig"`
 }
 
 // NodeStatus Node status
