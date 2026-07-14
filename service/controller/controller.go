@@ -180,11 +180,6 @@ func (c *Controller) Close() error {
 			}
 		}
 	}
-	if closer, ok := c.apiClient.(interface{ Close() error }); ok {
-		if err := closer.Close(); err != nil {
-			return err
-		}
-	}
 
 	return nil
 }
@@ -597,10 +592,10 @@ func (c *Controller) userInfoMonitor() (err error) {
 	// Report Online info
 	if onlineDevice, err := c.GetOnlineDevice(c.Tag); err != nil {
 		c.logger.Print(err)
-	} else if len(*onlineDevice) > 0 || c.panelType == "Xboard" {
+	} else if len(*onlineDevice) > 0 {
 		if err = c.apiClient.ReportNodeOnlineUsers(onlineDevice); err != nil {
 			c.logger.Print(err)
-		} else if len(*onlineDevice) > 0 {
+		} else {
 			c.logger.Printf("Report %d online users", len(*onlineDevice))
 		}
 	}

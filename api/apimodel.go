@@ -17,7 +17,6 @@ const (
 type Config struct {
 	APIHost             string  `mapstructure:"ApiHost"`
 	NodeID              int     `mapstructure:"NodeID"`
-	MachineID           int     `mapstructure:"MachineID"`
 	Key                 string  `mapstructure:"ApiKey"`
 	NodeType            string  `mapstructure:"NodeType"`
 	EnableVless         bool    `mapstructure:"EnableVless"`

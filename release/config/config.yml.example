@@ -18,7 +18,6 @@ Nodes:
       ApiHost: "http://127.0.0.1:667"
       ApiKey: "123"
       NodeID: 41
-      MachineID: 0 # Optional for Xboard machine mode REST authentication
       NodeType: V2ray # Node type: V2ray, Vmess, Vless, Shadowsocks, Trojan, Shadowsocks-Plugin
       Timeout: 30 # Timeout for the api request
       EnableVless: false # Enable Vless for V2ray Type
