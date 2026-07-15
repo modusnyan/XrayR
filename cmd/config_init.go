@@ -45,7 +45,8 @@ func newConfigInitCommand() *cobra.Command {
 	var enableReality, realityShow bool
 	var realityDest, realityServerNames, realityPrivateKey, realityShortIds string
 	var realityMinClientVer, realityMaxClientVer string
-	var realityMaxTimeDiff uint64
+	var realityMaxTimeDiff, realityProxyProtocolVer uint64
+	var disableLocalRealityConfig bool
 
 	// Network & rate limits
 	var listenIP, sendIP string
@@ -198,6 +199,26 @@ func newConfigInitCommand() *cobra.Command {
 						realityMinClientVer, realityMaxClientVer, realityMaxTimeDiff)
 				if err != nil {
 					return err
+				}
+				if enableReality {
+					if realityMaxTimeDiff == 0 {
+						mtdStr, mtdErr := promptDefault(w, reader, "  Max time diff (ms)", "0")
+						if mtdErr != nil {
+							return mtdErr
+						}
+						realityMaxTimeDiff, _ = strconv.ParseUint(mtdStr, 10, 64)
+					}
+					if realityProxyProtocolVer == 0 {
+						ppvStr, ppvErr := promptDefault(w, reader, "  PROXY protocol version (0=disable)", "0")
+						if ppvErr != nil {
+							return ppvErr
+						}
+						realityProxyProtocolVer, _ = strconv.ParseUint(ppvStr, 10, 64)
+					}
+					disableLocalRealityConfig, err = promptYN(w, reader, "  Disable local REALITY config? (use panel config only)", false)
+					if err != nil {
+						return err
+					}
 				}
 
 				// ---- Step 5: Listen & rate limits ----
@@ -363,15 +384,17 @@ func newConfigInitCommand() *cobra.Command {
 			// REALITY
 			if enableReality {
 				ctrlCfg.EnableREALITY = true
+				ctrlCfg.DisableLocalREALITYConfig = disableLocalRealityConfig
 				ctrlCfg.REALITYConfigs = &controller.REALITYConfig{
-					Show:         realityShow,
-					Dest:         realityDest,
-					ServerNames:  splitTrim(realityServerNames),
-					PrivateKey:   realityPrivateKey,
-					ShortIds:     splitTrim(realityShortIds),
-					MinClientVer: realityMinClientVer,
-					MaxClientVer: realityMaxClientVer,
-					MaxTimeDiff:  realityMaxTimeDiff,
+					Show:             realityShow,
+					Dest:             realityDest,
+					ServerNames:      splitTrim(realityServerNames),
+					PrivateKey:       realityPrivateKey,
+					ShortIds:         splitTrim(realityShortIds),
+					MinClientVer:     realityMinClientVer,
+					MaxClientVer:     realityMaxClientVer,
+					MaxTimeDiff:      realityMaxTimeDiff,
+					ProxyProtocolVer: realityProxyProtocolVer,
 				}
 				if realityShortIds == "" {
 					ctrlCfg.REALITYConfigs.ShortIds = []string{""}
@@ -503,6 +526,8 @@ func newConfigInitCommand() *cobra.Command {
 	flags.StringVar(&realityMinClientVer, "reality-min-client-ver", "", "REALITY minimum client version")
 	flags.StringVar(&realityMaxClientVer, "reality-max-client-ver", "", "REALITY maximum client version")
 	flags.Uint64Var(&realityMaxTimeDiff, "reality-max-time-diff", 0, "REALITY max time diff (ms)")
+	flags.Uint64Var(&realityProxyProtocolVer, "reality-proxy-protocol-ver", 0, "REALITY PROXY protocol version")
+	flags.BoolVar(&disableLocalRealityConfig, "disable-local-reality-config", false, "Disable local REALITY config, use panel config only")
 	// Network & rate limits
 	flags.StringVar(&listenIP, "listen-ip", "", "Listen IP address")
 	flags.StringVar(&sendIP, "send-ip", "", "Outbound IP address")
