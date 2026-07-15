@@ -328,6 +328,7 @@ func promptCertSection(writer io.Writer, reader *bufio.Reader, certMode, certDom
 	fmt.Fprintln(writer, "    2. http   (HTTP-01 challenge, needs port 80)")
 	fmt.Fprintln(writer, "    3. tls    (TLS-ALPN-01 challenge)")
 	fmt.Fprintln(writer, "    4. file   (use existing certificate files)")
+	fmt.Fprintln(writer, "    5. none   (no certificate)")
 	modeStr, err := promptDefault(writer, reader, "  Choice", "1")
 	if err != nil {
 		return "", err
@@ -341,6 +342,8 @@ func promptCertSection(writer io.Writer, reader *bufio.Reader, certMode, certDom
 		certMode = "tls"
 	case "4":
 		certMode = "file"
+	case "5":
+		certMode = "none"
 	default:
 		certMode = "dns"
 	}
