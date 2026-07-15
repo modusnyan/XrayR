@@ -49,6 +49,27 @@ Nodes:
       DisableSniffing: false
       DisableLocalREALITYConfig: false
       EnableREALITY: false
+      REALITYConfigs:
+        Show: false
+        Dest: www.example.com:443
+        ProxyProtocolVer: 0
+        ServerNames:
+          - www.example.com
+        PrivateKey: ""
+        MinClientVer: ""
+        MaxClientVer: ""
+        MaxTimeDiff: 0
+        ShortIds:
+          - ""
+      CertConfig:
+        CertMode: none
+        CertDomain: ""
+        CertFile: ""
+        KeyFile: ""
+        Provider: ""
+        Email: ""
+        DNSEnv: {}
+        RejectUnknownSni: false
       AutoSpeedLimitConfig:
         Limit: 0
         WarnTimes: 0

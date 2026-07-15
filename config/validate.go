@@ -11,6 +11,8 @@ import (
 	"github.com/XrayR-project/XrayR/panel"
 )
 
+var realityShortIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{1,16}$`)
+
 // Validate performs local checks only and returns every issue found.
 func Validate(cfg *panel.Config) []Issue {
 	issues := make([]Issue, 0)
@@ -30,6 +32,20 @@ func Validate(cfg *panel.Config) []Issue {
 	if cfg.Diagnostics != nil && cfg.Diagnostics.Enable {
 		if _, _, err := net.SplitHostPort(cfg.Diagnostics.Listen); err != nil {
 			issues = append(issues, Issue{Severity: SeverityError, Path: "Diagnostics.Listen", Message: "invalid listen address", Suggestion: "use host:port, for example 127.0.0.1:8080"})
+		}
+	}
+	for path, filename := range map[string]string{
+		"DnsConfigPath": cfg.DnsConfigPath, "RouteConfigPath": cfg.RouteConfigPath,
+		"InboundConfigPath": cfg.InboundConfigPath, "OutboundConfigPath": cfg.OutboundConfigPath,
+	} {
+		if strings.TrimSpace(filename) != "" {
+			if stat, err := os.Stat(filename); err != nil || stat.IsDir() {
+				message := "file is not readable"
+				if err == nil {
+					message = "path points to a directory"
+				}
+				issues = append(issues, Issue{Severity: SeverityError, Path: path, Message: message, Suggestion: "provide a readable JSON file path"})
+			}
 		}
 	}
 	if len(cfg.NodesConfig) == 0 {
@@ -84,6 +100,9 @@ func Validate(cfg *panel.Config) []Issue {
 			issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.DNSType", Message: "unsupported DNS strategy", Suggestion: "use AsIs, UseIP, UseIPv4, or UseIPv6"})
 		}
 		if global := controllerCfg.GlobalDeviceLimitConfig; global != nil && global.Enable {
+			if !containsFold([]string{"tcp", "unix"}, global.RedisNetwork) {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.GlobalDeviceLimitConfig.RedisNetwork", Message: "unsupported Redis network", Suggestion: "use tcp or unix"})
+			}
 			if strings.TrimSpace(global.RedisAddr) == "" {
 				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.GlobalDeviceLimitConfig.RedisAddr", Message: "RedisAddr is required when global device limit is enabled"})
 			}
@@ -91,18 +110,68 @@ func Validate(cfg *panel.Config) []Issue {
 				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.GlobalDeviceLimitConfig", Message: "Redis Timeout and Expiry must be greater than zero"})
 			}
 		}
-		if controllerCfg.EnableREALITY && controllerCfg.REALITYConfigs != nil && !controllerCfg.DisableLocalREALITYConfig {
-			reality := controllerCfg.REALITYConfigs
-			if reality.Dest == "" || len(reality.ServerNames) == 0 || reality.PrivateKey == "" {
-				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.REALITYConfigs", Message: "local REALITY requires Dest, ServerNames, and PrivateKey", Suggestion: "provide the fields or enable DisableLocalREALITYConfig"})
+		if speed := controllerCfg.AutoSpeedLimitConfig; speed != nil && speed.Limit > 0 {
+			if speed.WarnTimes < 0 {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.AutoSpeedLimitConfig.WarnTimes", Message: "WarnTimes cannot be negative"})
+			}
+			if speed.LimitSpeed <= 0 {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.AutoSpeedLimitConfig.LimitSpeed", Message: "LimitSpeed must be greater than zero when automatic speed limiting is enabled"})
+			}
+			if speed.LimitDuration <= 0 {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.AutoSpeedLimitConfig.LimitDuration", Message: "LimitDuration must be greater than zero when automatic speed limiting is enabled"})
 			}
 		}
-		if cert := controllerCfg.CertConfig; cert != nil && strings.EqualFold(cert.CertMode, "file") {
-			for field, path := range map[string]string{"CertFile": cert.CertFile, "KeyFile": cert.KeyFile} {
-				if path == "" {
-					issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.CertConfig." + field, Message: field + " is required for file certificate mode"})
-				} else if _, statErr := os.Stat(path); statErr != nil {
-					issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.CertConfig." + field, Message: "file is not readable", Suggestion: statErr.Error()})
+		if controllerCfg.EnableREALITY {
+			if controllerCfg.REALITYConfigs == nil && !controllerCfg.DisableLocalREALITYConfig {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.REALITYConfigs", Message: "REALITYConfigs is required for local REALITY", Suggestion: "configure local REALITY or enable DisableLocalREALITYConfig"})
+			} else if controllerCfg.REALITYConfigs != nil && !controllerCfg.DisableLocalREALITYConfig {
+				reality := controllerCfg.REALITYConfigs
+				if strings.TrimSpace(reality.Dest) == "" || len(reality.ServerNames) == 0 || strings.TrimSpace(reality.PrivateKey) == "" {
+					issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.REALITYConfigs", Message: "local REALITY requires Dest, ServerNames, and PrivateKey", Suggestion: "provide the fields or enable DisableLocalREALITYConfig"})
+				}
+				for shortIDIndex, shortID := range reality.ShortIds {
+					if shortID != "" && (!realityShortIDPattern.MatchString(shortID) || len(shortID)%2 != 0) {
+						issues = append(issues, Issue{Severity: SeverityError, Path: fmt.Sprintf("%s.ControllerConfig.REALITYConfigs.ShortIds[%d]", prefix, shortIDIndex), Message: "short ID must be an even-length hexadecimal string up to 16 characters or empty"})
+					}
+				}
+			}
+		}
+		if controllerCfg.EnableFallback {
+			fallbackSupported := containsFold([]string{"Trojan", "Vless"}, apiConfig.NodeType) || (strings.EqualFold(apiConfig.NodeType, "V2ray") && apiConfig.EnableVless)
+			if !fallbackSupported {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.EnableFallback", Message: "fallback is only supported for Trojan and VLESS nodes"})
+			}
+			if len(controllerCfg.FallBackConfigs) == 0 {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.FallBackConfigs", Message: "at least one fallback is required when fallback is enabled"})
+			}
+			for fallbackIndex, fallback := range controllerCfg.FallBackConfigs {
+				if fallback == nil || strings.TrimSpace(fallback.Dest) == "" {
+					issues = append(issues, Issue{Severity: SeverityError, Path: fmt.Sprintf("%s.ControllerConfig.FallBackConfigs[%d].Dest", prefix, fallbackIndex), Message: "fallback destination is required"})
+				}
+			}
+		}
+		if cert := controllerCfg.CertConfig; cert != nil {
+			if !containsFold([]string{"none", "file", "http", "tls", "dns"}, cert.CertMode) {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.CertConfig.CertMode", Message: "unsupported certificate mode", Suggestion: "use none, file, http, tls, or dns"})
+			}
+			if containsFold([]string{"http", "tls", "dns"}, cert.CertMode) && strings.TrimSpace(cert.CertDomain) == "" {
+				issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.CertConfig.CertDomain", Message: "CertDomain is required for ACME certificate modes"})
+			}
+			if strings.EqualFold(cert.CertMode, "dns") {
+				if strings.TrimSpace(cert.Provider) == "" {
+					issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.CertConfig.Provider", Message: "DNS provider is required for DNS certificate mode"})
+				}
+				if len(cert.DNSEnv) == 0 {
+					issues = append(issues, Issue{Severity: SeverityWarning, Path: prefix + ".ControllerConfig.CertConfig.DNSEnv", Message: "DNS provider environment is empty", Suggestion: "set the provider credential variables required by lego"})
+				}
+			}
+			if strings.EqualFold(cert.CertMode, "file") {
+				for field, path := range map[string]string{"CertFile": cert.CertFile, "KeyFile": cert.KeyFile} {
+					if path == "" {
+						issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.CertConfig." + field, Message: field + " is required for file certificate mode"})
+					} else if _, statErr := os.Stat(path); statErr != nil {
+						issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ControllerConfig.CertConfig." + field, Message: "file is not readable", Suggestion: statErr.Error()})
+					}
 				}
 			}
 		}
