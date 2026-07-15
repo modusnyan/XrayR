@@ -59,29 +59,44 @@ func nodeGroups(node *NodeState) []*huh.Group {
 			huh.NewInput().Title("Panel request timeout (seconds)").Value(&node.Timeout).Validate(validatePositiveInt),
 		),
 		huh.NewGroup(
-			huh.NewConfirm().Title("Enable VLESS for V2ray node?").Value(&node.EnableVless),
+			huh.NewNote().Title("VLESS options"),
+			huh.NewConfirm().Title("Enable VLESS for V2ray node?").Description("When enabled the node will use VLESS protocol instead of VMess.").Value(&node.EnableVless),
 		).WithHideFunc(func() bool { return !strings.EqualFold(node.NodeType, "V2ray") }),
 		huh.NewGroup(
-			huh.NewInput().Title("VLESS flow").Value(&node.VlessFlow),
+			huh.NewNote().Title("VLESS flow"),
+			huh.NewInput().Title("VLESS flow").Description("Flow setting for VLESS connections.").Value(&node.VlessFlow),
 		).WithHideFunc(func() bool { return !isVLESS(node.NodeType, node.EnableVless) }),
 		huh.NewGroup(
+			huh.NewNote().Title("Local limits").Description("Local settings override panel-provided values. Set to 0 to use panel defaults."),
 			huh.NewInput().Title("Local speed limit (Mbps)").Value(&node.SpeedLimit).Validate(validateNonNegativeFloat),
 			huh.NewInput().Title("Local device limit").Value(&node.DeviceLimit).Validate(validateNonNegativeInt),
 			huh.NewInput().Title("Local rule list path").Value(&node.RuleListPath),
-			huh.NewConfirm().Title("Disable panel custom configuration?").Value(&node.DisableCustomConfig),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("Panel behavior"),
+			huh.NewConfirm().Title("Disable panel custom configuration?").Description("When enabled the panel custom config will be ignored.").Value(&node.DisableCustomConfig),
 		),
 		huh.NewGroup(
 			huh.NewNote().Title("Controller").Description("Network binding, synchronization, DNS and reporting behavior."),
 			huh.NewInput().Title("Listen IP").Value(&node.ListenIP).Validate(validateRequired),
 			huh.NewInput().Title("Outbound send IP").Value(&node.SendIP).Validate(validateRequired),
 			huh.NewInput().Title("Update interval (seconds)").Value(&node.UpdatePeriodic).Validate(validatePositiveInt),
-			huh.NewConfirm().Title("Enable custom DNS?").Value(&node.EnableDNS),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("DNS and proxy protocol"),
+			huh.NewConfirm().Title("Enable custom DNS?").Description("Requires a valid dns.json to be configured on the node.").Value(&node.EnableDNS),
 			huh.NewSelect[string]().Title("DNS strategy").Options(huh.NewOptions("AsIs", "UseIP", "UseIPv4", "UseIPv6")...).Value(&node.DNSType),
-			huh.NewConfirm().Title("Enable PROXY protocol?").Value(&node.EnableProxyProtocol),
-			huh.NewConfirm().Title("Disable traffic upload?").Value(&node.DisableUploadTraffic),
-			huh.NewConfirm().Title("Disable rule synchronization?").Value(&node.DisableGetRule),
-			huh.NewConfirm().Title("Disable Shadowsocks IV check?").Value(&node.DisableIVCheck),
-			huh.NewConfirm().Title("Disable traffic sniffing?").Value(&node.DisableSniffing),
+			huh.NewConfirm().Title("Enable PROXY protocol?").Description("Only works for WebSocket and TCP transports.").Value(&node.EnableProxyProtocol),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("Traffic and rule reporting"),
+			huh.NewConfirm().Title("Disable traffic upload?").Description("When enabled traffic statistics are not uploaded to the panel.").Value(&node.DisableUploadTraffic),
+			huh.NewConfirm().Title("Disable rule synchronization?").Description("When enabled rules from the panel are not fetched.").Value(&node.DisableGetRule),
+		),
+		huh.NewGroup(
+			huh.NewNote().Title("Protocol options"),
+			huh.NewConfirm().Title("Disable Shadowsocks IV check?").Description("When enabled the Shadowsocks IV check is skipped.").Value(&node.DisableIVCheck),
+			huh.NewConfirm().Title("Disable traffic sniffing?").Description("When enabled traffic content detection is disabled.").Value(&node.DisableSniffing),
 		),
 	}
 	groups = append(groups, certGroups(node)...)
@@ -103,12 +118,12 @@ func certGroups(node *NodeState) []*huh.Group {
 		huh.NewGroup(
 			huh.NewInput().Title("Certificate file").Value(&node.CertFile).Validate(validateRequired),
 			huh.NewInput().Title("Private key file").Value(&node.CertKeyFile).Validate(validateRequired),
-			huh.NewConfirm().Title("Reject unknown SNI?").Value(&node.CertRejectUnknownSNI),
+			huh.NewConfirm().Title("Reject unknown SNI?").Description("When enabled connections with unknown SNI are rejected.").Value(&node.CertRejectUnknownSNI),
 		).WithHideFunc(func() bool { return node.CertMode != "file" }),
 		huh.NewGroup(
 			huh.NewInput().Title("Certificate domain").Value(&node.CertDomain).Validate(validateRequired),
 			huh.NewInput().Title("ACME account email").Value(&node.CertEmail).Validate(validateRequired),
-			huh.NewConfirm().Title("Reject unknown SNI?").Value(&node.CertRejectUnknownSNI),
+			huh.NewConfirm().Title("Reject unknown SNI?").Description("When enabled connections with unknown SNI are rejected.").Value(&node.CertRejectUnknownSNI),
 		).WithHideFunc(func() bool { return !acmeMode(node.CertMode) }),
 		huh.NewGroup(
 			huh.NewInput().Title("DNS provider").Description("Provider name used by lego, for example alidns or cloudflare.").Value(&node.CertProvider).Validate(validateRequired),
@@ -121,13 +136,15 @@ func realityGroups(node *NodeState) []*huh.Group {
 	return []*huh.Group{
 		huh.NewGroup(
 			huh.NewNote().Title("REALITY"),
-			huh.NewConfirm().Title("Enable REALITY?").Value(&node.EnableREALITY),
+			huh.NewConfirm().Title("Enable REALITY?").Description("Enable REALITY protocol support (requires Xray-core >= 1.8.0).").Value(&node.EnableREALITY),
 		),
 		huh.NewGroup(
-			huh.NewConfirm().Title("Use panel-supplied REALITY config only?").Value(&node.DisableLocalREALITYConfig),
+			huh.NewNote().Title("REALITY config source"),
+			huh.NewConfirm().Title("Use panel-supplied REALITY config only?").Description("When enabled local REALITY settings are ignored and the panel config is used instead.").Value(&node.DisableLocalREALITYConfig),
 		).WithHideFunc(func() bool { return !node.EnableREALITY }),
 		huh.NewGroup(
-			huh.NewConfirm().Title("Show REALITY debug information?").Value(&node.RealityShow),
+			huh.NewNote().Title("Local REALITY configuration"),
+			huh.NewConfirm().Title("Show REALITY debug information?").Description("When enabled REALITY debug messages are printed to the log.").Value(&node.RealityShow),
 			huh.NewInput().Title("Destination").Value(&node.RealityDest).Validate(validateRequired),
 			huh.NewText().Title("Server names").Description("One hostname per line.").Lines(4).Value(&node.RealityServerNames).Validate(validateRequired),
 			huh.NewInput().Title("Private key").Value(&node.RealityPrivateKey).EchoMode(huh.EchoModePassword).Validate(validateRequired),
@@ -144,7 +161,7 @@ func limitGroups(node *NodeState) []*huh.Group {
 	return []*huh.Group{
 		huh.NewGroup(
 			huh.NewNote().Title("Automatic speed limiting"),
-			huh.NewConfirm().Title("Enable automatic speed limiting?").Value(&node.AutoSpeedLimitEnable),
+			huh.NewConfirm().Title("Enable automatic speed limiting?").Description("When enabled users exceeding the trigger speed will be temporarily limited.").Value(&node.AutoSpeedLimitEnable),
 		),
 		huh.NewGroup(
 			huh.NewInput().Title("Trigger speed (Mbps)").Value(&node.AutoSpeedLimit).Validate(validatePositiveInt),
@@ -154,7 +171,7 @@ func limitGroups(node *NodeState) []*huh.Group {
 		).WithHideFunc(func() bool { return !node.AutoSpeedLimitEnable }),
 		huh.NewGroup(
 			huh.NewNote().Title("Global device limiting"),
-			huh.NewConfirm().Title("Enable Redis global device limiting?").Value(&node.RedisEnable),
+			huh.NewConfirm().Title("Enable Redis global device limiting?").Description("When enabled device counts are tracked globally via Redis.").Value(&node.RedisEnable),
 		),
 		huh.NewGroup(
 			huh.NewSelect[string]().Title("Redis network").Options(huh.NewOptions("tcp", "unix")...).Value(&node.RedisNetwork),
@@ -172,7 +189,7 @@ func fallbackGroups(node *NodeState) []*huh.Group {
 	groups := []*huh.Group{
 		huh.NewGroup(
 			huh.NewNote().Title("Fallbacks").Description("Fallbacks are available only for Trojan and VLESS nodes."),
-			huh.NewConfirm().Title("Enable fallback routing?").Value(&node.EnableFallback),
+			huh.NewConfirm().Title("Enable fallback routing?").Description("When enabled connections are forwarded to the fallback destination on protocol mismatch.").Value(&node.EnableFallback),
 		).WithHideFunc(func() bool { return !supportsFallback(node.NodeType, node.EnableVless) }),
 	}
 	for index := range node.Fallbacks {
