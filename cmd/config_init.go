@@ -18,6 +18,7 @@ import (
 
 	"github.com/XrayR-project/XrayR/api"
 	xconfig "github.com/XrayR-project/XrayR/config"
+	"github.com/XrayR-project/XrayR/common/limiter"
 	"github.com/XrayR-project/XrayR/common/mylego"
 	"github.com/XrayR-project/XrayR/panel"
 	"github.com/XrayR-project/XrayR/preflight"
@@ -31,46 +32,70 @@ func newConfigInitCommand() *cobra.Command {
 	var nodeID int
 	var force, skipVerify, skipDoctor bool
 
-	// Certificate flags
+	// Node-specific
+	var enableVless bool
+	var vlessFlow string
+
+	// Certificate
 	var certMode, certDomain, certProvider, certEmail, certFile, certKeyFile string
+	var certDNSEnvStr string
 	var certRejectUnknownSni bool
 
-	// REALITY flags
+	// REALITY
 	var enableReality, realityShow bool
 	var realityDest, realityServerNames, realityPrivateKey, realityShortIds string
 	var realityMinClientVer, realityMaxClientVer string
 	var realityMaxTimeDiff uint64
+
+	// Network & rate limits
+	var listenIP, sendIP string
+	var speedLimit float64
+	var deviceLimit int
+
+	// Redis global device limit
+	var redisEnable bool
+	var redisAddr, redisPassword string
+	var redisDB int
+
+	// Advanced
+	var enableProxyProtocol bool
+	var enableFallback bool
+	var fallbackSNI, fallbackAlpn, fallbackPath, fallbackDest string
+	var ruleListPath string
+	var disableUploadTraffic, disableGetRule bool
 
 	command := &cobra.Command{
 		Use:   "init",
 		Short: "Interactively or non-interactively create a configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			reader := bufio.NewReader(cmd.InOrStdin())
+			w := cmd.OutOrStdout()
 			interactive := panelName == "" || apiHost == "" || apiKey == "" || nodeID == 0 || nodeType == ""
 
-			// ---- Step 1: Panel & API ----
 			if interactive {
 				var err error
+
+				// ---- Step 1: Panel & API ----
 				if panelName == "" {
-					panelName, err = promptPanel(cmd.OutOrStdout(), reader)
+					panelName, err = promptPanel(w, reader)
 					if err != nil {
 						return err
 					}
 				}
 				if apiHost == "" {
-					apiHost, err = prompt(cmd.OutOrStdout(), reader, "Panel URL")
+					apiHost, err = prompt(w, reader, "Panel URL")
 					if err != nil {
 						return err
 					}
 				}
 				if apiKey == "" {
-					apiKey, err = promptSecret(cmd.OutOrStdout(), reader, "API key")
+					apiKey, err = promptSecret(w, reader, "API key")
 					if err != nil {
 						return err
 					}
 				}
 				if nodeID == 0 {
-					value, readErr := prompt(cmd.OutOrStdout(), reader, "Node ID")
+					value, readErr := prompt(w, reader, "Node ID")
 					if readErr != nil {
 						return readErr
 					}
@@ -80,98 +105,247 @@ func newConfigInitCommand() *cobra.Command {
 					}
 				}
 				if nodeType == "" {
-					nodeType, err = prompt(cmd.OutOrStdout(), reader, "Node type (Vless/Vmess/Trojan/Shadowsocks)")
+					nodeType, err = prompt(w, reader, "Node type (Vless/Vmess/Trojan/Shadowsocks)")
 					if err != nil {
 						return err
 					}
 				}
 
-				// ---- Step 2: Certificate ----
-				certMode, err = promptCertSection(cmd.OutOrStdout(), reader, certMode, certDomain, certProvider, certEmail, certFile, certKeyFile, certRejectUnknownSni)
+				// ---- Step 2: Node-specific options ----
+				normalizedType := strings.ToLower(strings.TrimSpace(nodeType))
+				if normalizedType == "v2ray" && !enableVless {
+					enableVless, err = promptYN(w, reader, "Enable VLESS for V2ray node?", false)
+					if err != nil {
+						return err
+					}
+				}
+				if enableVless || normalizedType == "vless" {
+					if vlessFlow != "" {
+						vlessFlow, _ = promptDefault(w, reader, "  VLESS flow", vlessFlow)
+					} else {
+						vlessFlow, err = promptDefault(w, reader, "  VLESS flow", "xtls-rprx-vision")
+						if err != nil {
+							return err
+						}
+					}
+				}
+
+				// ---- Step 3: Certificate ----
+				certMode, err = promptCertSection(w, reader, certMode)
 				if err != nil {
 					return err
 				}
-				if certMode != "" {
+				if certMode != "" && certMode != "none" {
 					switch certMode {
 					case "dns", "http", "tls":
 						if certDomain != "" {
-							certDomain, _ = promptDefault(cmd.OutOrStdout(), reader, "  Domain", certDomain)
+							certDomain, _ = promptDefault(w, reader, "  Domain", certDomain)
 						} else {
-							certDomain, err = prompt(cmd.OutOrStdout(), reader, "  Domain")
+							certDomain, err = prompt(w, reader, "  Domain")
 							if err != nil {
 								return err
 							}
 						}
 						if certProvider != "" {
-							certProvider, _ = promptDefault(cmd.OutOrStdout(), reader, "  DNS provider (e.g. alidns, cloudflare)", certProvider)
+							certProvider, _ = promptDefault(w, reader, "  DNS provider (e.g. alidns, cloudflare)", certProvider)
 						} else {
-							certProvider, err = promptDefault(cmd.OutOrStdout(), reader, "  DNS provider (e.g. alidns, cloudflare)", "alidns")
+							certProvider, err = promptDefault(w, reader, "  DNS provider (e.g. alidns, cloudflare)", "alidns")
 							if err != nil {
 								return err
 							}
 						}
 						if certEmail != "" {
-							certEmail, _ = promptDefault(cmd.OutOrStdout(), reader, "  Email for Let's Encrypt", certEmail)
+							certEmail, _ = promptDefault(w, reader, "  Email for Let's Encrypt", certEmail)
 						} else {
-							certEmail, err = prompt(cmd.OutOrStdout(), reader, "  Email for Let's Encrypt")
+							certEmail, err = prompt(w, reader, "  Email for Let's Encrypt")
+							if err != nil {
+								return err
+							}
+						}
+						// DNS environment variables
+						if certDNSEnvStr == "" {
+							certDNSEnvStr, err = promptDNSEnv(w, reader)
 							if err != nil {
 								return err
 							}
 						}
 					case "file":
 						if certFile != "" {
-							certFile, _ = promptDefault(cmd.OutOrStdout(), reader, "  Certificate file path", certFile)
+							certFile, _ = promptDefault(w, reader, "  Certificate file path", certFile)
 						} else {
-							certFile, err = prompt(cmd.OutOrStdout(), reader, "  Certificate file path")
+							certFile, err = prompt(w, reader, "  Certificate file path")
 							if err != nil {
 								return err
 							}
 						}
 						if certKeyFile != "" {
-							certKeyFile, _ = promptDefault(cmd.OutOrStdout(), reader, "  Private key file path", certKeyFile)
+							certKeyFile, _ = promptDefault(w, reader, "  Private key file path", certKeyFile)
 						} else {
-							certKeyFile, err = prompt(cmd.OutOrStdout(), reader, "  Private key file path")
+							certKeyFile, err = prompt(w, reader, "  Private key file path")
 							if err != nil {
 								return err
 							}
 						}
-					case "none":
-						// nothing extra
 					}
 				}
 
-				// ---- Step 3: REALITY ----
+				// ---- Step 4: REALITY ----
 				enableReality, realityShow, realityDest, realityServerNames, realityPrivateKey, realityShortIds,
 					realityMinClientVer, realityMaxClientVer, realityMaxTimeDiff, err =
-					promptRealitySection(cmd.OutOrStdout(), reader,
+					promptRealitySection(w, reader,
 						enableReality, realityShow, realityDest, realityServerNames,
 						realityPrivateKey, realityShortIds,
 						realityMinClientVer, realityMaxClientVer, realityMaxTimeDiff)
 				if err != nil {
 					return err
 				}
+
+				// ---- Step 5: Listen & rate limits ----
+				fmt.Fprintln(w, "\n--- Network & Rate Limits ---")
+				if listenIP != "" {
+					listenIP, _ = promptDefault(w, reader, "  Listen IP", listenIP)
+				} else {
+					listenIP, err = promptDefault(w, reader, "  Listen IP", "0.0.0.0")
+					if err != nil {
+						return err
+					}
+				}
+				if sendIP != "" {
+					sendIP, _ = promptDefault(w, reader, "  Send IP (outbound)", sendIP)
+				} else {
+					sendIP, err = promptDefault(w, reader, "  Send IP (outbound)", "0.0.0.0")
+					if err != nil {
+						return err
+					}
+				}
+				if speedLimit == 0 {
+					spd, spdErr := promptDefault(w, reader, "  Speed limit (Mbps, 0=disable)", "0")
+					if spdErr != nil {
+						return spdErr
+					}
+					speedLimit, _ = strconv.ParseFloat(spd, 64)
+				}
+				if deviceLimit == 0 {
+					dev, devErr := promptDefault(w, reader, "  Device limit (0=disable)", "0")
+					if devErr != nil {
+						return devErr
+					}
+					deviceLimit, _ = strconv.Atoi(dev)
+				}
+
+				// ---- Step 6: Redis global device limit ----
+				redisEnable, err = promptYN(w, reader, "  Enable Redis global device limit?", false)
+				if err != nil {
+					return err
+				}
+				if redisEnable {
+					if redisAddr != "" {
+						redisAddr, _ = promptDefault(w, reader, "    Redis address", redisAddr)
+					} else {
+						redisAddr, err = promptDefault(w, reader, "    Redis address", "127.0.0.1:6379")
+						if err != nil {
+							return err
+						}
+					}
+					if redisPassword != "" {
+						redisPassword, _ = promptSecret(w, reader, "    Redis password")
+					} else {
+						redisPassword, err = promptDefault(w, reader, "    Redis password (optional)", "")
+						if err != nil {
+							return err
+						}
+					}
+					if redisDB == 0 {
+						dbStr, dbErr := promptDefault(w, reader, "    Redis DB", "0")
+						if dbErr != nil {
+							return dbErr
+						}
+						redisDB, _ = strconv.Atoi(dbStr)
+					}
+				}
+
+				// ---- Step 7: Advanced ----
+				doAdvanced, advErr := promptYN(w, reader, "Configure advanced options? (proxy protocol, fallback, rule list)", false)
+				if advErr != nil {
+					return advErr
+				}
+				if doAdvanced {
+					enableProxyProtocol, err = promptYN(w, reader, "  Enable proxy protocol? (for CDN/nginx)", false)
+					if err != nil {
+						return err
+					}
+					if normalizedType == "trojan" || normalizedType == "vless" {
+						enableFallback, err = promptYN(w, reader, "  Enable fallback? (Trojan/VLESS only)", false)
+						if err != nil {
+							return err
+						}
+						if enableFallback {
+							fallbackDest, err = promptDefault(w, reader, "    Fallback destination (port)", "80")
+							if err != nil {
+								return err
+							}
+							fallbackSNI, err = promptDefault(w, reader, "    Fallback SNI (optional)", "")
+							if err != nil {
+								return err
+							}
+							fallbackAlpn, err = promptDefault(w, reader, "    Fallback ALPN (optional)", "")
+							if err != nil {
+								return err
+							}
+							fallbackPath, err = promptDefault(w, reader, "    Fallback HTTP path (optional)", "")
+							if err != nil {
+								return err
+							}
+						}
+					}
+					ruleListPath, err = promptDefault(w, reader, "  Rule list file path (optional)", "")
+					if err != nil {
+						return err
+					}
+					disableUploadTraffic, err = promptYN(w, reader, "  Disable traffic upload to panel?", false)
+					if err != nil {
+						return err
+					}
+					disableGetRule, err = promptYN(w, reader, "  Disable rule fetch from panel?", false)
+					if err != nil {
+						return err
+					}
+				}
 			}
 
-			// ---- Build config ----
-			definition, err := panel.LookupPanel(panelName)
-			if err != nil {
-				return err
+			// ==================== Build config ====================
+			definition, panelErr := panel.LookupPanel(panelName)
+			if panelErr != nil {
+				return panelErr
 			}
 			if !definition.SupportsNodeType(nodeType) {
 				return fmt.Errorf("%s does not support node type %s", definition.Name, nodeType)
 			}
 
-			nodeConfig := &panel.NodesConfig{
-				PanelType: definition.Name,
-				ApiConfig: &api.Config{
-					APIHost: apiHost, Key: apiKey, NodeID: nodeID, NodeType: nodeType, Timeout: 30,
-				},
+			apiCfg := &api.Config{
+				APIHost:             apiHost,
+				Key:                 apiKey,
+				NodeID:              nodeID,
+				NodeType:            nodeType,
+				Timeout:             30,
+				EnableVless:         enableVless,
+				VlessFlow:           vlessFlow,
+				SpeedLimit:          speedLimit,
+				DeviceLimit:         deviceLimit,
+				RuleListPath:        ruleListPath,
 			}
 
-			// Build ControllerConfig with cert and REALITY
-			ctrlCfg := &controller.Config{}
+			ctrlCfg := &controller.Config{
+				ListenIP:             listenIP,
+				SendIP:               sendIP,
+				DisableUploadTraffic: disableUploadTraffic,
+				DisableGetRule:       disableGetRule,
+				EnableProxyProtocol:  enableProxyProtocol,
+			}
+
+			// Certificate
 			if certMode != "" && certMode != "none" {
-				ctrlCfg.CertConfig = &mylego.CertConfig{
+				certCfg := &mylego.CertConfig{
 					CertMode:         certMode,
 					CertDomain:       certDomain,
 					CertFile:         certFile,
@@ -180,40 +354,59 @@ func newConfigInitCommand() *cobra.Command {
 					Email:            certEmail,
 					RejectUnknownSni: certRejectUnknownSni,
 				}
-				if certMode == "dns" || certMode == "http" || certMode == "tls" {
-					if certDomain != "" {
-						ctrlCfg.CertConfig.CertDomain = certDomain
-					}
-					if certProvider != "" {
-						ctrlCfg.CertConfig.Provider = certProvider
-					}
+				if certDNSEnvStr != "" {
+					certCfg.DNSEnv = parseDNSEnv(certDNSEnvStr)
 				}
+				ctrlCfg.CertConfig = certCfg
 			}
+
+			// REALITY
 			if enableReality {
-				serverNames := strings.Split(realityServerNames, ",")
-				for i := range serverNames {
-					serverNames[i] = strings.TrimSpace(serverNames[i])
-				}
-				shortIds := strings.Split(realityShortIds, ",")
-				for i := range shortIds {
-					shortIds[i] = strings.TrimSpace(shortIds[i])
-				}
-				if realityShortIds == "" {
-					shortIds = []string{""}
-				}
 				ctrlCfg.EnableREALITY = true
 				ctrlCfg.REALITYConfigs = &controller.REALITYConfig{
 					Show:         realityShow,
 					Dest:         realityDest,
-					ServerNames:  serverNames,
+					ServerNames:  splitTrim(realityServerNames),
 					PrivateKey:   realityPrivateKey,
-					ShortIds:     shortIds,
+					ShortIds:     splitTrim(realityShortIds),
 					MinClientVer: realityMinClientVer,
 					MaxClientVer: realityMaxClientVer,
 					MaxTimeDiff:  realityMaxTimeDiff,
 				}
+				if realityShortIds == "" {
+					ctrlCfg.REALITYConfigs.ShortIds = []string{""}
+				}
 			}
-			nodeConfig.ControllerConfig = ctrlCfg
+
+			// Fallback
+			if enableFallback {
+				ctrlCfg.EnableFallback = true
+				ctrlCfg.FallBackConfigs = []*controller.FallBackConfig{{
+					SNI:  fallbackSNI,
+					Alpn: fallbackAlpn,
+					Path: fallbackPath,
+					Dest: fallbackDest,
+				}}
+			}
+
+			// Redis global device limit
+			if redisEnable {
+				ctrlCfg.GlobalDeviceLimitConfig = &limiter.GlobalDeviceLimitConfig{
+					Enable:        true,
+					RedisNetwork:  "tcp",
+					RedisAddr:     redisAddr,
+					RedisPassword: redisPassword,
+					RedisDB:       redisDB,
+					Timeout:       5,
+					Expiry:        60,
+				}
+			}
+
+			nodeConfig := &panel.NodesConfig{
+				PanelType:        definition.Name,
+				ApiConfig:        apiCfg,
+				ControllerConfig: ctrlCfg,
+			}
 
 			cfg := &panel.Config{
 				ConfigVersion: xconfig.CurrentVersion,
@@ -242,8 +435,8 @@ func newConfigInitCommand() *cobra.Command {
 					if !interactive {
 						return fmt.Errorf("output %s exists; use --force", output)
 					}
-					fmt.Fprintln(cmd.OutOrStdout(), DiffText(readExisting(output), string(data)))
-					answer, askErr := prompt(cmd.OutOrStdout(), reader, "Overwrite? [y/N]")
+					fmt.Fprintln(w, DiffText(readExisting(output), string(data)))
+					answer, askErr := prompt(w, reader, "Overwrite? [y/N]")
 					if askErr != nil {
 						return askErr
 					}
@@ -256,8 +449,8 @@ func newConfigInitCommand() *cobra.Command {
 			if err := xconfig.WriteAtomic(output, data, force); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Configuration written to %s\n", output)
-			fmt.Fprintln(cmd.OutOrStdout(), "✓ Local validation passed")
+			fmt.Fprintf(w, "Configuration written to %s\n", output)
+			fmt.Fprintln(w, "✓ Local validation passed")
 			if !skipVerify || !skipDoctor {
 				results := preflight.Run(context.Background(), cfg, preflight.Options{Node: -1, Timeout: 5 * time.Second, Remote: !skipVerify})
 				failed := false
@@ -265,18 +458,20 @@ func newConfigInitCommand() *cobra.Command {
 					if result.Status == preflight.StatusError {
 						failed = true
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s: %s\n", result.Status, result.Name, result.Detail)
+					fmt.Fprintf(w, "[%s] %s: %s\n", result.Status, result.Name, result.Detail)
 				}
 				if failed {
 					return errors.New("configuration was written, but remote verification failed; run XrayR doctor for details")
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "✓ Doctor checks passed")
+				fmt.Fprintln(w, "✓ Doctor checks passed")
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Next: systemctl enable --now XrayR (config: %s)\n", output)
+			fmt.Fprintf(w, "Next: systemctl enable --now XrayR (config: %s)\n", output)
 			return nil
 		},
 	}
+
 	flags := command.Flags()
+	// Panel & API
 	flags.StringVar(&panelName, "panel", "", "Panel type")
 	flags.StringVar(&apiHost, "api-host", "", "Panel URL")
 	flags.StringVar(&apiKey, "api-key", "", "Panel API key")
@@ -286,17 +481,19 @@ func newConfigInitCommand() *cobra.Command {
 	flags.BoolVar(&force, "force", false, "Overwrite output")
 	flags.BoolVar(&skipVerify, "skip-verify", false, "Skip remote verification")
 	flags.BoolVar(&skipDoctor, "skip-doctor", false, "Skip doctor after writing")
-
-	// Certificate flags
+	// Node-specific
+	flags.BoolVar(&enableVless, "enable-vless", false, "Enable VLESS for V2ray nodes")
+	flags.StringVar(&vlessFlow, "vless-flow", "", "VLESS flow (e.g. xtls-rprx-vision)")
+	// Certificate
 	flags.StringVar(&certMode, "cert-mode", "", "TLS certificate mode (none/file/http/tls/dns)")
 	flags.StringVar(&certDomain, "cert-domain", "", "Certificate domain")
 	flags.StringVar(&certProvider, "cert-provider", "", "DNS provider for ACME challenge")
 	flags.StringVar(&certEmail, "cert-email", "", "Email for Let's Encrypt")
 	flags.StringVar(&certFile, "cert-file", "", "Path to TLS certificate file (mode=file)")
 	flags.StringVar(&certKeyFile, "cert-key-file", "", "Path to TLS private key file (mode=file)")
+	flags.StringVar(&certDNSEnvStr, "cert-dns-env", "", "DNS env vars (KEY1=VAL1,KEY2=VAL2)")
 	flags.BoolVar(&certRejectUnknownSni, "cert-reject-unknown-sni", false, "Reject unknown SNI in TLS")
-
-	// REALITY flags
+	// REALITY
 	flags.BoolVar(&enableReality, "enable-reality", false, "Enable REALITY")
 	flags.BoolVar(&realityShow, "reality-show", true, "Show REALITY debug info")
 	flags.StringVar(&realityDest, "reality-dest", "www.amazon.com:443", "REALITY destination address")
@@ -306,14 +503,34 @@ func newConfigInitCommand() *cobra.Command {
 	flags.StringVar(&realityMinClientVer, "reality-min-client-ver", "", "REALITY minimum client version")
 	flags.StringVar(&realityMaxClientVer, "reality-max-client-ver", "", "REALITY maximum client version")
 	flags.Uint64Var(&realityMaxTimeDiff, "reality-max-time-diff", 0, "REALITY max time diff (ms)")
+	// Network & rate limits
+	flags.StringVar(&listenIP, "listen-ip", "", "Listen IP address")
+	flags.StringVar(&sendIP, "send-ip", "", "Outbound IP address")
+	flags.Float64Var(&speedLimit, "speed-limit", 0, "Speed limit in Mbps")
+	flags.IntVar(&deviceLimit, "device-limit", 0, "Device limit (0=disable)")
+	// Redis
+	flags.BoolVar(&redisEnable, "redis-enable", false, "Enable Redis global device limit")
+	flags.StringVar(&redisAddr, "redis-addr", "", "Redis address (host:port)")
+	flags.StringVar(&redisPassword, "redis-password", "", "Redis password")
+	flags.IntVar(&redisDB, "redis-db", 0, "Redis DB number")
+	// Advanced
+	flags.BoolVar(&enableProxyProtocol, "enable-proxy-protocol", false, "Enable proxy protocol")
+	flags.BoolVar(&enableFallback, "enable-fallback", false, "Enable fallback")
+	flags.StringVar(&fallbackDest, "fallback-dest", "", "Fallback destination port")
+	flags.StringVar(&fallbackSNI, "fallback-sni", "", "Fallback SNI")
+	flags.StringVar(&fallbackAlpn, "fallback-alpn", "", "Fallback ALPN")
+	flags.StringVar(&fallbackPath, "fallback-path", "", "Fallback HTTP path")
+	flags.StringVar(&ruleListPath, "rule-list-path", "", "Path to rule list file")
+	flags.BoolVar(&disableUploadTraffic, "disable-upload-traffic", false, "Disable traffic upload to panel")
+	flags.BoolVar(&disableGetRule, "disable-get-rule", false, "Disable rule fetch from panel")
 
 	return command
 }
 
-// promptCertSection handles the interactive TLS certificate configuration.
-func promptCertSection(writer io.Writer, reader *bufio.Reader, certMode, certDomain, certProvider, certEmail, certFile, certKeyFile string, certRejectUnknownSni bool) (string, error) {
+// promptCertSection handles the interactive TLS certificate mode selection.
+func promptCertSection(writer io.Writer, reader *bufio.Reader, certMode string) (string, error) {
 	if certMode != "" {
-		return certMode, nil // already set via flags
+		return certMode, nil
 	}
 	answer, err := promptYN(writer, reader, "Configure HTTPS/TLS certificate? (recommended for production)", false)
 	if err != nil {
@@ -335,38 +552,93 @@ func promptCertSection(writer io.Writer, reader *bufio.Reader, certMode, certDom
 	}
 	switch strings.TrimSpace(modeStr) {
 	case "1":
-		certMode = "dns"
+		return "dns", nil
 	case "2":
-		certMode = "http"
+		return "http", nil
 	case "3":
-		certMode = "tls"
+		return "tls", nil
 	case "4":
-		certMode = "file"
+		return "file", nil
 	case "5":
-		certMode = "none"
+		return "none", nil
 	default:
-		certMode = "dns"
+		return "dns", nil
 	}
-	return certMode, nil
+}
+
+// promptDNSEnv collects DNS provider environment variables interactively.
+func promptDNSEnv(writer io.Writer, reader *bufio.Reader) (string, error) {
+	fmt.Fprintln(writer, "  DNS environment variables (KEY=VALUE, enter empty line to finish):")
+	var pairs []string
+	for {
+		line, err := prompt(writer, reader, "    ")
+		if err != nil {
+			return "", err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			break
+		}
+		if strings.Contains(line, "=") {
+			pairs = append(pairs, line)
+		}
+	}
+	return strings.Join(pairs, ","), nil
+}
+
+// parseDNSEnv parses "KEY1=VAL1,KEY2=VAL2" into a map.
+func parseDNSEnv(raw string) map[string]string {
+	result := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) == 2 {
+			result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// splitTrim splits a comma-separated string and trims each element.
+func splitTrim(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // promptRealitySection handles the interactive REALITY configuration.
 func promptRealitySection(writer io.Writer, reader *bufio.Reader,
 	enableReality, realityShow bool,
-	realityDest, realityServerNames, realityPrivateKey, realityShortIds string,
-	realityMinClientVer, realityMaxClientVer string, realityMaxTimeDiff uint64,
+	dest, serverNames, privateKey, shortIds string,
+	minClientVer, maxClientVer string, maxTimeDiff uint64,
 ) (bool, bool, string, string, string, string, string, string, uint64, error) {
 
 	if enableReality {
-		// already set via flags
-		if realityDest == "" {
-			realityDest = "www.amazon.com:443"
+		if dest == "" {
+			dest = "www.amazon.com:443"
 		}
-		if realityServerNames == "" {
-			realityServerNames = "www.amazon.com"
+		if serverNames == "" {
+			serverNames = "www.amazon.com"
 		}
-		return enableReality, realityShow, realityDest, realityServerNames, realityPrivateKey,
-			realityShortIds, realityMinClientVer, realityMaxClientVer, realityMaxTimeDiff, nil
+		return true, realityShow, dest, serverNames, privateKey, shortIds, minClientVer, maxClientVer, maxTimeDiff, nil
 	}
 
 	answer, err := promptYN(writer, reader, "Enable REALITY? (requires Xray-core >= 1.8.0)", false)
@@ -382,37 +654,37 @@ func promptRealitySection(writer io.Writer, reader *bufio.Reader,
 		return false, false, "", "", "", "", "", "", 0, err
 	}
 
-	dest, err := promptDefault(writer, reader, "  Destination", "www.amazon.com:443")
+	newDest, err := promptDefault(writer, reader, "  Destination", "www.amazon.com:443")
 	if err != nil {
 		return false, false, "", "", "", "", "", "", 0, err
 	}
 
-	serverNames, err := promptDefault(writer, reader, "  Server names (comma-separated)", "www.amazon.com")
+	newServerNames, err := promptDefault(writer, reader, "  Server names (comma-separated)", "www.amazon.com")
 	if err != nil {
 		return false, false, "", "", "", "", "", "", 0, err
 	}
 
-	privateKey, err := promptDefault(writer, reader, "  Private key (leave empty to skip)", "")
+	newPrivateKey, err := promptDefault(writer, reader, "  Private key (leave empty to skip)", "")
 	if err != nil {
 		return false, false, "", "", "", "", "", "", 0, err
 	}
 
-	shortIds, err := promptDefault(writer, reader, "  Short IDs (comma-separated, e.g. abc123,def456)", "")
+	newShortIds, err := promptDefault(writer, reader, "  Short IDs (comma-separated, e.g. abc123,def456)", "")
 	if err != nil {
 		return false, false, "", "", "", "", "", "", 0, err
 	}
 
-	minVer, err := promptDefault(writer, reader, "  Min client version (optional)", "")
+	newMinVer, err := promptDefault(writer, reader, "  Min client version (optional)", "")
 	if err != nil {
 		return false, false, "", "", "", "", "", "", 0, err
 	}
 
-	maxVer, err := promptDefault(writer, reader, "  Max client version (optional)", "")
+	newMaxVer, err := promptDefault(writer, reader, "  Max client version (optional)", "")
 	if err != nil {
 		return false, false, "", "", "", "", "", "", 0, err
 	}
 
-	return true, show, dest, serverNames, privateKey, shortIds, minVer, maxVer, 0, nil
+	return true, show, newDest, newServerNames, newPrivateKey, newShortIds, newMinVer, newMaxVer, 0, nil
 }
 
 func promptPanel(writer io.Writer, reader *bufio.Reader) (string, error) {
@@ -450,7 +722,6 @@ func promptSecret(writer io.Writer, reader *bufio.Reader, label string) (string,
 	return prompt(writer, reader, "")
 }
 
-// promptDefault prompts with a default value shown in brackets.
 func promptDefault(writer io.Writer, reader *bufio.Reader, label, defaultVal string) (string, error) {
 	if defaultVal != "" {
 		fmt.Fprintf(writer, "%s [%s]: ", label, defaultVal)
@@ -468,7 +739,6 @@ func promptDefault(writer io.Writer, reader *bufio.Reader, label, defaultVal str
 	return value, nil
 }
 
-// promptYN asks a yes/no question and returns the boolean answer.
 func promptYN(writer io.Writer, reader *bufio.Reader, label string, defaultYes bool) (bool, error) {
 	suffix := "[y/N]"
 	fallback := false
@@ -496,7 +766,6 @@ func promptYN(writer io.Writer, reader *bufio.Reader, label string, defaultYes b
 
 func readExisting(path string) string { data, _ := os.ReadFile(path); return string(data) }
 
-// DiffText produces a deterministic line diff without extra dependencies.
 func DiffText(oldText, newText string) string {
 	oldLines := strings.Split(oldText, "\n")
 	newLines := strings.Split(newText, "\n")
