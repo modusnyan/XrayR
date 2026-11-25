@@ -30,7 +30,7 @@ Nodes:
       NodeType: Vless
       Timeout: 30
       EnableVless: true
-      VlessFlow: xtls-rprx-vision
+      # VlessFlow is ignored for Xboard: the node uses the flow set in the panel.
       SpeedLimit: 0
       DeviceLimit: 0
       RuleListPath: ""

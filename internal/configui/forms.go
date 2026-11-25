@@ -63,7 +63,7 @@ func nodeGroups(node *NodeState) []*huh.Group {
 		).WithHideFunc(func() bool { return !strings.EqualFold(node.NodeType, "V2ray") }),
 		huh.NewGroup(
 			huh.NewNote().Title("VLESS flow"),
-			huh.NewInput().Title("VLESS flow").Description("Flow setting for VLESS connections.").Value(&node.VlessFlow),
+			huh.NewInput().Title("VLESS flow").Description("Ignored for Xboard: the flow set on the node in the panel is used. Leave empty.").Value(&node.VlessFlow),
 		).WithHideFunc(func() bool { return !isVLESS(node.NodeType, node.EnableVless) }),
 		huh.NewGroup(
 			huh.NewNote().Title("Local limits").Description("Local settings override panel-provided values. Set to 0 to use panel defaults."),

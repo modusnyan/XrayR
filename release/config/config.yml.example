@@ -23,7 +23,7 @@ Nodes:
       NodeType: V2ray # Node type: V2ray, Vmess, Vless, Shadowsocks, Trojan
       Timeout: 30 # Timeout for the api request
       EnableVless: false # Enable Vless for V2ray Type
-      VlessFlow: "xtls-rprx-vision" # Only support vless
+      # VlessFlow is ignored for Xboard: the node uses the flow set on the node in the panel.
       SpeedLimit: 0 # Mbps, Local settings will replace remote settings, 0 means disable
       DeviceLimit: 0 # Local settings will replace remote settings, 0 means disable
       RuleListPath: # /etc/XrayR/rulelist Path to local rulelist file
@@ -93,7 +93,7 @@ Nodes:
 #      NodeType: V2ray # Node type: V2ray, Shadowsocks, Trojan
 #      Timeout: 30 # Timeout for the api request
 #      EnableVless: false # Enable Vless for V2ray Type
-#      VlessFlow: "xtls-rprx-vision" # Only support vless
+#      # VlessFlow is ignored for Xboard: the node uses the flow set on the node in the panel.
 #      SpeedLimit: 0 # Mbps, Local settings will replace remote settings, 0 means disable
 #      DeviceLimit: 0 # Local settings will replace remote settings, 0 means disable
 #      RuleListPath: # /etc/XrayR/rulelist Path to local rulelist file

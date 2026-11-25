@@ -330,7 +330,7 @@ func nodeFromConfig(node *panel.NodesConfig) NodeState {
 
 func defaultNodeState() NodeState {
 	return NodeState{
-		PanelType: "Xboard", NodeType: "Vless", Timeout: "30", VlessFlow: "xtls-rprx-vision",
+		PanelType: "Xboard", NodeType: "Vless", Timeout: "30",
 		ListenIP: "0.0.0.0", SendIP: "0.0.0.0", UpdatePeriodic: "60", DNSType: "AsIs",
 		CertMode: "none", RealityShow: true, RealityDest: "www.amazon.com:443",
 		RealityProxyProtocolVer: "0", RealityServerNames: "www.amazon.com", RealityMaxTimeDiff: "0",
