@@ -173,6 +173,9 @@ func (c *Controller) DeleteInboundLimiter(tag string) error {
 }
 
 func (c *Controller) GetOnlineDevice(tag string) (*[]api.OnlineUser, error) {
+	if c.dispatcher == nil || c.dispatcher.Limiter == nil {
+		return nil, fmt.Errorf("limiter is not initialised")
+	}
 	return c.dispatcher.Limiter.GetOnlineDevice(tag)
 }
 

@@ -192,9 +192,14 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 		}
 		streamSetting.HTTPUPGRADESettings = httpupgradeSettings
 	case "splithttp", "xhttp":
+		// xray-core unmarshals Extra into the full XHTTP config and then puts
+		// host, path and mode back from the fields here, so the panel's padding,
+		// post-size and header settings reach the server.
 		splithttpSetting := &conf.SplitHTTPConfig{
-			Path: nodeInfo.Path,
-			Host: nodeInfo.Host,
+			Path:  nodeInfo.Path,
+			Host:  nodeInfo.Host,
+			Mode:  nodeInfo.XHTTPMode,
+			Extra: nodeInfo.XHTTPExtra,
 		}
 		streamSetting.SplitHTTPSettings = splithttpSetting
 	}

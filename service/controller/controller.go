@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"sync"
@@ -80,6 +81,24 @@ type Controller struct {
 	// coreFailures counts consecutive failed liveness probes. Only the heartbeat
 	// task writes it, but it is atomic so a future reader cannot race.
 	coreFailures atomic.Int64
+	// emptyUsersPending is set when the panel returned an empty user list while
+	// the node still serves users. The list is only applied once the next pull
+	// confirms it, so a single bad panel answer cannot disconnect every user.
+	// Only the node monitor touches it; it is atomic for the same reason as above.
+	emptyUsersPending atomic.Bool
+	// nodeDisabled is set while the panel reports the node as switched off. The
+	// inbound is removed and nothing is served until the panel enables the node
+	// again, at which point the node monitor rebuilds it from a fresh config.
+	nodeDisabled atomic.Bool
+	// certWarnings holds the last set of certificate warnings, so each distinct
+	// set is logged once (see checkCertConfig).
+	certWarnings atomic.Value
+	// configRejected is set while the panel's current node configuration is one
+	// XrayR rejected. The panel then keeps answering 304 for it, so without this
+	// flag the next round would report a clean sync and hide the problem. Only
+	// a successfully applied configuration, or the panel sending one equal to
+	// the active configuration, clears it. Written by the node monitor only.
+	configRejected atomic.Bool
 }
 
 // runtimeSnapshot returns the current node, user list and tag. The returned
@@ -165,6 +184,12 @@ func (c *Controller) Start() error {
 	if nodeErr == nil {
 		userInfo, nodeErr = c.apiClient.GetUserList()
 	}
+	// A node the panel switched off must not come back from the snapshot. Start
+	// it offline instead: the monitors keep polling and bring it up once the
+	// panel enables it again.
+	if errors.Is(nodeErr, api.ErrNodeDisabled) {
+		return c.startDisabled()
+	}
 	if nodeErr == nil && !c.config.DisableGetRule {
 		if provider, ok := c.apiClient.(api.RuleProvider); ok {
 			rules, _ = provider.GetNodeRule()
@@ -210,6 +235,33 @@ func (c *Controller) Start() error {
 		}
 	}
 
+	c.checkCertConfig()
+	c.startMonitors(newNodeInfo.EnableTLS && !c.config.EnableREALITY)
+	c.stateMu.Lock()
+	c.lastSync = time.Now()
+	c.lastError = ""
+	c.stateMu.Unlock()
+	observability.LastSync.WithLabelValues(c.panelType, newNodeInfo.NodeType).Set(float64(time.Now().Unix()))
+	observability.Users.WithLabelValues(c.panelType, newNodeInfo.NodeType).Set(float64(len(*userInfo)))
+	return nil
+}
+
+// startDisabled starts the controller without an inbound because the panel
+// reports the node as disabled.
+func (c *Controller) startDisabled() error {
+	c.logger.Warn("Panel reports this node as disabled; it stays offline until the panel enables it")
+	c.nodeDisabled.Store(true)
+	c.publishState(nil, nil, "")
+	c.removeSnapshot()
+	// The node may be enabled later with TLS, so register the cert monitor; it
+	// is a no-op while there is no TLS node.
+	c.startMonitors(!c.config.EnableREALITY)
+	c.recordNodeDisabled()
+	return nil
+}
+
+// startMonitors initialises the monitor state and launches the periodic tasks.
+func (c *Controller) startMonitors(withCertMonitor bool) {
 	if c.config.AutoSpeedLimitConfig == nil {
 		c.config.AutoSpeedLimitConfig = &AutoSpeedLimitConfig{}
 	}
@@ -239,7 +291,7 @@ func (c *Controller) Start() error {
 		periodicTask{tag: "user monitor", Periodic: &task.Periodic{Interval: c.pushPeriod, Execute: c.guardTask("user monitor", c.userInfoMonitor)}},
 		periodicTask{tag: "core heartbeat", Periodic: &task.Periodic{Interval: c.pullPeriod, Execute: c.guardTask("core heartbeat", c.coreHeartbeatMonitor)}},
 	)
-	if newNodeInfo.EnableTLS && !c.config.EnableREALITY {
+	if withCertMonitor {
 		c.tasks = append(c.tasks, periodicTask{tag: "cert monitor", Periodic: &task.Periodic{Interval: time.Duration(c.config.UpdatePeriodic) * time.Minute, Execute: c.guardTask("cert monitor", c.certMonitor)}})
 	}
 	for i := range c.tasks {
@@ -252,13 +304,6 @@ func (c *Controller) Start() error {
 			}
 		}(c.tasks[i].Periodic, c.tasks[i].tag)
 	}
-	c.stateMu.Lock()
-	c.lastSync = time.Now()
-	c.lastError = ""
-	c.stateMu.Unlock()
-	observability.LastSync.WithLabelValues(c.panelType, newNodeInfo.NodeType).Set(float64(time.Now().Unix()))
-	observability.Users.WithLabelValues(c.panelType, newNodeInfo.NodeType).Set(float64(len(*userInfo)))
-	return nil
 }
 
 // guardTask contains panics raised by a periodic task body.
@@ -287,10 +332,51 @@ func validateRuntimeSnapshot(node *api.NodeInfo, users *[]api.UserInfo) error {
 	if node == nil || node.Port == 0 {
 		return errors.New("server port must be greater than zero")
 	}
-	if users == nil || len(*users) == 0 {
-		return errors.New("user list is empty")
+	// An empty list is valid (the node serves nobody); a nil one means no list
+	// was obtained at all.
+	if users == nil {
+		return errors.New("user list is missing")
 	}
 	return nil
+}
+
+// confirmUserList decides which user list the node monitor applies.
+//
+// fetched is the list the panel just returned (nil when notModified is set).
+// An empty list while the node still serves users is held back once: the node
+// keeps its current users and the next pull must confirm the empty list,
+// either with another empty 200 or with a 304 against the empty list's ETag.
+// Any non-empty answer cancels the pending confirmation.
+func (c *Controller) confirmUserList(fetched *[]api.UserInfo, notModified bool) (users *[]api.UserInfo, changed bool) {
+	current := c.currentUsers()
+	currentCount := 0
+	if current != nil {
+		currentCount = len(*current)
+	}
+
+	if notModified {
+		if c.emptyUsersPending.CompareAndSwap(true, false) {
+			// The cached ETag belongs to the empty list held back last round.
+			c.logger.Warnf("Panel confirmed an empty user list; removing %d users", currentCount)
+			empty := []api.UserInfo{}
+			return &empty, true
+		}
+		return current, false
+	}
+
+	if fetched != nil && len(*fetched) == 0 && currentCount > 0 {
+		if !c.emptyUsersPending.Load() {
+			c.emptyUsersPending.Store(true)
+			c.logger.Warnf("Panel returned an empty user list; keeping %d users until the next pull confirms it", currentCount)
+			return current, false
+		}
+		c.emptyUsersPending.Store(false)
+		c.logger.Warnf("Panel confirmed an empty user list; removing %d users", currentCount)
+		return fetched, true
+	}
+
+	c.emptyUsersPending.Store(false)
+	return fetched, true
 }
 
 // Close implement the Close() function of the service interface
@@ -350,10 +436,26 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		if errors.Is(err, api.ErrNodeNotModified) {
 			nodeInfoChanged = false
 			newNodeInfo = c.currentNode()
+		} else if errors.Is(err, api.ErrNodeDisabled) {
+			c.takeNodeDown()
+			return nil
 		} else {
-			c.logger.Print(err)
+			// A transport, HTTP or JSON failure is an *api.APIError and passes
+			// with the next good round. Anything else is a configuration XrayR
+			// cannot serve (e.g. an unsupported Shadowsocks plugin) and stays
+			// reported until the panel changes it.
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) {
+				c.recordSyncError(err)
+			} else {
+				c.recordRejectedConfig(err)
+			}
 			return nil
 		}
+	}
+	if newNodeInfo == nil {
+		// 304 while the node is offline: there is no configuration to apply.
+		return nil
 	}
 	if newNodeInfo.Port == 0 {
 		return errors.New("server port must > 0")
@@ -384,16 +486,30 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	}
 
 	// Update User
-	var usersChanged = true
 	newUserInfo, err := c.apiClient.GetUserList()
+	notModified := errors.Is(err, api.ErrUserNotModified)
+	if errors.Is(err, api.ErrNodeDisabled) {
+		c.takeNodeDown()
+		return nil
+	}
+	if err != nil && !notModified {
+		c.logger.Print(err)
+		return nil
+	}
 	if err != nil {
-		if errors.Is(err, api.ErrUserNotModified) {
-			usersChanged = false
-			newUserInfo = c.currentUsers()
-		} else {
-			c.logger.Print(err)
+		// ErrUserNotModified: no fresh list in this response.
+		newUserInfo = nil
+	}
+	var usersChanged bool
+	if c.nodeDisabled.Load() {
+		// Coming back online: apply the panel's list as is. There are no users
+		// being served whose removal would need confirming.
+		if newUserInfo == nil {
 			return nil
 		}
+		usersChanged = true
+	} else {
+		newUserInfo, usersChanged = c.confirmUserList(newUserInfo, notModified)
 	}
 
 	// Apply a node change transactionally. Validate the complete replacement
@@ -403,25 +519,29 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		activeNode := c.currentNode()
 		if !reflect.DeepEqual(activeNode, newNodeInfo) {
 			if err := validateRuntimeSnapshot(newNodeInfo, newUserInfo); err != nil {
-				c.recordSyncError(err)
+				c.recordRejectedConfig(err)
 				return nil
 			}
 			newTag := fmt.Sprintf("%s_%s_%d", newNodeInfo.NodeType, c.config.ListenIP, newNodeInfo.Port)
 			if _, err := InboundBuilder(c.config, newNodeInfo, newTag); err != nil {
-				c.recordSyncError(err)
+				c.recordRejectedConfig(err)
 				return nil
 			}
 			if _, err := OutboundBuilder(c.config, newNodeInfo, newTag); err != nil {
-				c.recordSyncError(err)
+				c.recordRejectedConfig(err)
 				return nil
 			}
 
 			oldNode, oldUsers, oldTag := c.runtimeSnapshot()
-			if err := c.removeOldTag(oldTag); err != nil {
-				c.recordSyncError(err)
-				return nil
+			// A disabled node has no inbound left to remove or roll back to.
+			wasDisabled := c.nodeDisabled.Load()
+			if !wasDisabled {
+				if err := c.removeOldTag(oldTag); err != nil {
+					c.recordSyncError(err)
+					return nil
+				}
+				_ = c.DeleteInboundLimiter(oldTag)
 			}
-			_ = c.DeleteInboundLimiter(oldTag)
 			c.publishState(newNodeInfo, newUserInfo, newTag)
 			applyErr := c.addNewTag(newNodeInfo, newTag)
 			if applyErr == nil {
@@ -433,6 +553,11 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			if applyErr != nil {
 				_ = c.removeOldTag(newTag)
 				_ = c.DeleteInboundLimiter(newTag)
+				if wasDisabled {
+					c.publishState(nil, nil, "")
+					c.recordRejectedConfig(fmt.Errorf("panel re-enabled the node but its configuration was rejected; the node stays offline: %w", applyErr))
+					return nil
+				}
 				c.publishState(oldNode, oldUsers, oldTag)
 				rollbackErr := c.addNewTag(oldNode, oldTag)
 				if rollbackErr == nil {
@@ -442,15 +567,22 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 					rollbackErr = c.AddInboundLimiter(oldTag, oldNode.SpeedLimit, oldUsers, c.config.GlobalDeviceLimitConfig)
 				}
 				if rollbackErr != nil {
-					c.recordSyncError(fmt.Errorf("apply failed: %v; rollback failed: %w", applyErr, rollbackErr))
+					c.recordRejectedConfig(fmt.Errorf("apply failed: %v; rollback failed: %w", applyErr, rollbackErr))
 				} else {
-					c.recordSyncError(fmt.Errorf("new node configuration rejected and rolled back: %w", applyErr))
+					c.recordRejectedConfig(fmt.Errorf("new node configuration rejected and rolled back: %w", applyErr))
 				}
 				return nil
 			}
+			if wasDisabled {
+				c.nodeDisabled.Store(false)
+				c.logger.Warnf("Panel re-enabled the node; serving %d users again", len(*newUserInfo))
+			}
+			c.configRejected.Store(false)
 			c.markSynced()
 			nodeInfoChanged = true
 		} else {
+			// The panel is back on the configuration that is already running.
+			c.configRejected.Store(false)
 			nodeInfoChanged = false
 		}
 	}
@@ -511,6 +643,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			c.logger.WithError(err).Warn("Failed to update runtime snapshot")
 		}
 	}
+	c.checkCertConfig()
 	c.markSynced()
 	return nil
 }
@@ -519,7 +652,10 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 func (c *Controller) markSynced() {
 	node, users, _ := c.runtimeSnapshot()
 	c.stateMu.Lock()
-	c.lastSync, c.lastError = time.Now(), ""
+	c.lastSync = time.Now()
+	if !c.configRejected.Load() {
+		c.lastError = ""
+	}
 	c.stateMu.Unlock()
 	if node == nil {
 		return
@@ -535,6 +671,91 @@ func (c *Controller) recordSyncError(err error) {
 	c.lastError = err.Error()
 	c.stateMu.Unlock()
 	c.logger.WithError(err).Warn("Node synchronization failed; keeping the last valid runtime snapshot")
+}
+
+// recordRejectedConfig records that the panel's current node configuration was
+// rejected; the error stays reported until the panel sends a different one.
+func (c *Controller) recordRejectedConfig(err error) {
+	c.configRejected.Store(true)
+	c.recordSyncError(err)
+}
+
+// nodeStatus collects what the node reports to the panel each push period.
+func (c *Controller) nodeStatus(users *[]api.UserInfo) *api.NodeStatus {
+	status := &api.NodeStatus{Goroutines: runtime.NumGoroutine()}
+	system, err := serverstatus.GetSystemStatus()
+	if err != nil {
+		// Containers often hide part of /proc; report what could be read.
+		c.logger.WithError(err).Debug("System status is incomplete")
+	}
+	status.CPU, status.Uptime = system.CPU, system.Uptime
+	status.MemTotal, status.MemUsed = system.MemTotal, system.MemUsed
+	status.SwapTotal, status.SwapUsed = system.SwapTotal, system.SwapUsed
+	status.DiskTotal, status.DiskUsed = system.DiskTotal, system.DiskUsed
+	if system.MemTotal > 0 {
+		status.Mem = float64(system.MemUsed) / float64(system.MemTotal) * 100
+	}
+	if system.DiskTotal > 0 {
+		status.Disk = float64(system.DiskUsed) / float64(system.DiskTotal) * 100
+	}
+	if users != nil {
+		status.Users = len(*users)
+	}
+	c.stateMu.RLock()
+	status.SyncError = c.lastError
+	if !c.lastSync.IsZero() {
+		status.LastSyncAt = c.lastSync.Unix()
+	}
+	c.stateMu.RUnlock()
+	return status
+}
+
+// recordNodeDisabled surfaces the disabled state in diagnostics.
+func (c *Controller) recordNodeDisabled() {
+	c.stateMu.Lock()
+	c.lastError = api.ErrNodeDisabled.Error()
+	c.stateMu.Unlock()
+}
+
+// removeSnapshot deletes the runtime snapshot, if snapshots are enabled.
+func (c *Controller) removeSnapshot() {
+	if c.snapshotStore == nil {
+		return
+	}
+	if err := c.snapshotStore.Remove(); err != nil {
+		c.logger.WithError(err).Warn("Failed to remove the runtime snapshot of the disabled node")
+	}
+}
+
+// takeNodeDown stops serving after the panel reported the node as disabled.
+//
+// The inbound and its limiter are removed at once, so no new connection is
+// accepted, and the snapshot is deleted so a restart during a panel outage
+// cannot bring the node back. The user list and tag stay in the runtime state
+// (with the node cleared) until the user monitor has pushed the traffic counted
+// before the shutdown; the panel still accepts push for a disabled node.
+// Runs on the node monitor's goroutine; later calls while offline are no-ops.
+func (c *Controller) takeNodeDown() {
+	if c.nodeDisabled.Load() {
+		return
+	}
+	_, users, tag := c.runtimeSnapshot()
+	if tag != "" {
+		if err := c.removeOldTag(tag); err != nil {
+			c.logger.WithError(err).Error("Failed to remove the inbound of the disabled node")
+		}
+		_ = c.DeleteInboundLimiter(tag)
+	}
+	c.publishState(nil, users, tag)
+	c.nodeDisabled.Store(true)
+	c.emptyUsersPending.Store(false)
+	c.removeSnapshot()
+	c.recordNodeDisabled()
+	count := 0
+	if users != nil {
+		count = len(*users)
+	}
+	c.logger.Warnf("Panel disabled the node; stopped serving %d users", count)
 }
 
 func (c *Controller) removeOldTag(oldTag string) (err error) {
@@ -646,15 +867,20 @@ func (c *Controller) userInfoMonitor() (err error) {
 
 	// Read the runtime state once. The monitors share these values with the node
 	// monitor, which may replace them at any time.
-	tag := c.Tag()
-	userList := c.currentUsers()
+	state := c.state.Load()
+	var tag string
+	var userList *[]api.UserInfo
+	if state != nil {
+		tag, userList = state.tag, state.users
+	}
 
-	if c.capabilities.NodeStatusReport {
+	// A disabled node has nothing to report, and the panel refuses everything
+	// but traffic pushes for it.
+	nodeDisabled := c.nodeDisabled.Load()
+
+	if c.capabilities.NodeStatusReport && !nodeDisabled {
 		if reporter, ok := c.apiClient.(api.NodeStatusReporter); ok {
-			CPU, Mem, Disk, Uptime, statusErr := serverstatus.GetSystemInfo()
-			if statusErr != nil {
-				c.logger.Print(statusErr)
-			} else if statusErr = reporter.ReportNodeStatus(&api.NodeStatus{CPU: CPU, Mem: Mem, Disk: Disk, Uptime: Uptime}); statusErr != nil {
+			if statusErr := reporter.ReportNodeStatus(c.nodeStatus(userList)); statusErr != nil {
 				c.logger.Print(statusErr)
 			}
 		}
@@ -733,6 +959,7 @@ func (c *Controller) userInfoMonitor() (err error) {
 			c.logger.Print(err)
 		}
 	}
+	trafficReported := true
 	if len(userTraffic) > 0 {
 		c.logger.Printf("Reporting %d user(s) traffic to panel", len(userTraffic))
 		var reportErr error
@@ -750,20 +977,34 @@ func (c *Controller) userInfoMonitor() (err error) {
 		if reportErr != nil {
 			observability.TrafficFailures.WithLabelValues(c.panelType).Inc()
 			c.logger.Print(reportErr)
+			trafficReported = false
 		} else {
 			c.resetTraffic(&upCounterList, &downCounterList)
 		}
 	}
 
-	if c.capabilities.OnlineUserReport {
-		if reporter, ok := c.apiClient.(api.OnlineUserReporter); ok {
-			if onlineDevice, onlineErr := c.GetOnlineDevice(tag); onlineErr != nil {
-				c.logger.Print(onlineErr)
-			} else if len(*onlineDevice) > 0 {
+	// After the panel disabled the node the state keeps its users only until
+	// their remaining traffic is pushed. Drop them now, unless the node monitor
+	// published a new state in the meantime (the swap then fails harmlessly).
+	if state != nil && state.node == nil && state.users != nil && trafficReported {
+		if c.state.CompareAndSwap(state, &runtimeState{}) {
+			c.logger.Printf("Reported the remaining traffic of the disabled node; cleared %d users", len(*state.users))
+		}
+	}
+
+	// GetOnlineDevice also resets the per-period IP bookkeeping the local device
+	// limit counts against, so it runs every round whether or not the panel
+	// takes the report. Skipping it let every IP a user ever used count towards
+	// DeviceLimit until XrayR restarted.
+	if !nodeDisabled && tag != "" {
+		if onlineDevice, onlineErr := c.GetOnlineDevice(tag); onlineErr != nil {
+			c.logger.Print(onlineErr)
+		} else if c.capabilities.OnlineUserReport {
+			if reporter, ok := c.apiClient.(api.OnlineUserReporter); ok {
 				if onlineErr = reporter.ReportNodeOnlineUsers(onlineDevice); onlineErr != nil {
 					c.logger.Print(onlineErr)
-				} else {
-					c.logger.Printf("Report %d online users", len(*onlineDevice))
+				} else if len(*onlineDevice) > 0 {
+					c.logger.Printf("Reported %d online devices", len(*onlineDevice))
 				}
 			}
 		}

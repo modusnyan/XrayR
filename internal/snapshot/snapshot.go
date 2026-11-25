@@ -64,7 +64,10 @@ func (s *Store) Save(node *api.NodeInfo, users *[]api.UserInfo, rules *[]api.Det
 		reality.PrivateKey = ""
 		copyNode.REALITYConfig = &reality
 	}
-	payload := Payload{Version: Version, Identity: s.identity, SavedAt: time.Now().UTC(), Node: copyNode, Users: append([]api.UserInfo(nil), (*users)...)}
+	// Always a non-nil slice: an empty user list is persisted as "users": [],
+	// which Load accepts, while a missing or null list stays an incomplete snapshot.
+	savedUsers := append(make([]api.UserInfo, 0, len(*users)), (*users)...)
+	payload := Payload{Version: Version, Identity: s.identity, SavedAt: time.Now().UTC(), Node: copyNode, Users: savedUsers}
 	if rules != nil {
 		for _, rule := range *rules {
 			pattern := ""
@@ -138,7 +141,9 @@ func (s *Store) Load() (*api.NodeInfo, *[]api.UserInfo, *[]api.DetectRule, time.
 	if s.maxAge > 0 && time.Since(payload.SavedAt) > s.maxAge {
 		return nil, nil, nil, time.Time{}, errors.New("snapshot is expired")
 	}
-	if payload.Node.Port == 0 || len(payload.Users) == 0 {
+	// An empty user list is a valid state (the panel removed every user from the
+	// node). Only a missing or null list marks the snapshot as incomplete.
+	if payload.Node.Port == 0 || payload.Users == nil {
 		return nil, nil, nil, time.Time{}, errors.New("snapshot is incomplete")
 	}
 	rules := make([]api.DetectRule, 0, len(payload.Rules))
@@ -155,6 +160,17 @@ func (s *Store) Load() (*api.NodeInfo, *[]api.UserInfo, *[]api.DetectRule, time.
 	node := payload.Node
 	users := payload.Users
 	return &node, &users, &rules, payload.SavedAt, nil
+}
+
+// Remove deletes the node's snapshot. It is used when the panel disables the
+// node, so a later restart during a panel outage cannot resurrect a node the
+// operator switched off. Removing a snapshot that does not exist is not an error.
+func (s *Store) Remove() error {
+	err := os.Remove(s.path())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func payloadChecksum(payload Payload) (string, error) {

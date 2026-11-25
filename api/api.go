@@ -44,6 +44,14 @@ type IllegalReporter interface {
 	ReportIllegal(*[]DetectResult) error
 }
 
+// CertConfigProvider exposes the certificate setup the panel describes for the
+// node. XrayR does not apply it (TLS uses the local ControllerConfig.CertConfig);
+// the controller only compares the two and warns about mismatches.
+type CertConfigProvider interface {
+	// PanelCertConfig returns nil when the panel sends no certificate config.
+	PanelCertConfig() *PanelCertConfig
+}
+
 // Closer is implemented by clients with background resources.
 type Closer interface {
 	Close() error

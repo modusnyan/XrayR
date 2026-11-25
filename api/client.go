@@ -72,6 +72,28 @@ func ReadLocalRuleList(path string) []DetectRule {
 	return rules
 }
 
+// NodeStateHeader and NodeStateDisabled form the panel's "node disabled" signal.
+// Xboard answers config/user requests for a switched-off node with HTTP 410 and
+// this header; both must be present, so an unrelated 410 from a proxy or CDN is
+// never mistaken for it.
+const (
+	NodeStateHeader   = "X-Node-State"
+	NodeStateDisabled = "disabled"
+)
+
+// IsNodeDisabledResponse reports whether res is the panel's "node disabled" signal.
+func IsNodeDisabledResponse(res *resty.Response) bool {
+	return res != nil &&
+		res.StatusCode() == 410 &&
+		strings.EqualFold(strings.TrimSpace(res.Header().Get(NodeStateHeader)), NodeStateDisabled)
+}
+
+// NodeDisabledError wraps ErrNodeDisabled in an APIError so it is both
+// classified for metrics and matchable with errors.Is(err, ErrNodeDisabled).
+func NodeDisabledError(path, panel string, nodeID int) error {
+	return &APIError{Kind: ErrorNodeDisabled, Operation: path, Panel: panel, NodeID: nodeID, StatusCode: 410, Err: ErrNodeDisabled}
+}
+
 // CheckResponse validates the transport-level outcome of a panel request before
 // the adapter inspects the response body.
 func CheckResponse(res *resty.Response, path, panel string, nodeID int, err error) error {

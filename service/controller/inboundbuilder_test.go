@@ -330,3 +330,32 @@ func decodedTestRealityKey(t *testing.T) string {
 	}
 	return string(key)
 }
+
+func xhttpNode(mode, extra string) *api.NodeInfo {
+	node := &api.NodeInfo{
+		NodeType:          "Vless",
+		NodeID:            1,
+		Port:              1146,
+		TransportProtocol: "xhttp",
+		Host:              "cdn.example.com",
+		Path:              "/x",
+		XHTTPMode:         mode,
+	}
+	if extra != "" {
+		node.XHTTPExtra = []byte(extra)
+	}
+	return node
+}
+
+func TestBuildXHTTPWithModeAndExtra(t *testing.T) {
+	_, err := InboundBuilder(&Config{}, xhttpNode("stream-up", `{"xPaddingBytes":"200-800","scMaxEachPostBytes":500000}`), "xhttp_tag")
+	if err != nil {
+		t.Fatalf("valid xhttp settings rejected: %v", err)
+	}
+}
+
+func TestBuildXHTTPRejectsAnUnknownMode(t *testing.T) {
+	if _, err := InboundBuilder(&Config{}, xhttpNode("bogus", ""), "xhttp_tag"); err == nil {
+		t.Fatal("an unknown xhttp mode must fail the build, so the node keeps its previous config")
+	}
+}

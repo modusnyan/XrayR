@@ -29,7 +29,7 @@ var panelDefinitions = []PanelDefinition{
 	{
 		Name: "Xboard", Adapter: "NewV2board", Aliases: []string{"NewV2board", "V2board"}, New: func(c *api.Config) api.Client { return newV2board.New(c) },
 		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, Shadowsocks2022KeyDerivation: true},
+		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, NodeStatusReport: true, OnlineUserReport: true, Shadowsocks2022KeyDerivation: true},
 	},
 }
 

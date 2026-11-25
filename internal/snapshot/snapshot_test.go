@@ -129,7 +129,10 @@ func TestLoadRejectsSnapshotFromAnotherNode(t *testing.T) {
 
 	_, _, _, _, err := other.Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no such file", "each node has its own snapshot file")
+	// The message differs per platform ("no such file or directory" on Linux,
+	// "The system cannot find the file specified." on Windows); only the os
+	// error kind matters: another node's file simply does not exist.
+	assert.ErrorIs(t, err, os.ErrNotExist, "each node has its own snapshot file")
 }
 
 func TestLoadRejectsIncompleteSnapshot(t *testing.T) {
@@ -137,6 +140,38 @@ func TestLoadRejectsIncompleteSnapshot(t *testing.T) {
 	require.NoError(t, store.Save(&api.NodeInfo{NodeType: "Vless", NodeID: 12, Port: 0}, testUsers(), nil))
 
 	_, _, _, _, err := store.Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "incomplete")
+}
+
+func TestSaveAndLoadEmptyUserList(t *testing.T) {
+	store := newStore(t, time.Hour)
+	require.NoError(t, store.Save(testNode(), &[]api.UserInfo{}, nil))
+
+	data, err := os.ReadFile(store.path())
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"users": []`, "an empty list is persisted as an array, not null")
+
+	node, users, _, _, err := store.Load()
+	require.NoError(t, err, "a node whose users were all removed must still restart from its snapshot")
+	require.NotNil(t, node)
+	require.NotNil(t, users)
+	assert.Empty(t, *users)
+}
+
+func TestLoadRejectsNullUserList(t *testing.T) {
+	store := newStore(t, time.Hour)
+	payload := Payload{Version: Version, Identity: store.identity, SavedAt: time.Now().UTC(), Node: *testNode(), Users: nil}
+	checksum, err := payloadChecksum(payload)
+	require.NoError(t, err)
+	payload.Checksum = checksum
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(store.directory, 0o700))
+	require.NoError(t, os.WriteFile(store.path(), data, 0o600))
+
+	_, _, _, _, err = store.Load()
+
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "incomplete")
 }

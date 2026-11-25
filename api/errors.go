@@ -15,6 +15,10 @@ var (
 	ErrUserNotModified = errors.New("users not modified")
 	ErrNodeNotModified = errors.New("node not modified")
 	ErrRuleNotModified = errors.New("rules not modified")
+	// ErrNodeDisabled is returned when the panel explicitly reports that the node
+	// was switched off. Unlike a transport or server error it is not a reason to
+	// keep serving from the last snapshot: the controller takes the node down.
+	ErrNodeDisabled = errors.New("node disabled by panel")
 )
 
 const (
@@ -25,6 +29,7 @@ const (
 	ErrorRateLimited    ErrorKind = "rate_limited"
 	ErrorInvalidPayload ErrorKind = "invalid_payload"
 	ErrorServer         ErrorKind = "server"
+	ErrorNodeDisabled   ErrorKind = "node_disabled"
 )
 
 // APIError provides stable machine-readable error classification without

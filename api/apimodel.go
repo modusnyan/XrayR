@@ -27,6 +27,16 @@ type NodeStatus struct {
 	Mem    float64
 	Disk   float64
 	Uptime uint64
+	// Absolute resource figures in bytes; zero when unknown.
+	MemTotal, MemUsed   uint64
+	SwapTotal, SwapUsed uint64
+	DiskTotal, DiskUsed uint64
+	// Synchronization state, so the panel can show nodes whose latest
+	// configuration was rejected while they keep serving the previous one.
+	SyncError  string // empty when the last synchronization succeeded
+	LastSyncAt int64  // unix seconds of the last successful sync, 0 if never
+	Users      int    // users the node currently serves
+	Goroutines int
 }
 
 type NodeInfo struct {
@@ -52,6 +62,8 @@ type NodeInfo struct {
 	ServiceName         string
 	Method              string
 	Header              json.RawMessage
+	XHTTPMode           string          // XHTTP mode (auto, packet-up, stream-up, stream-one); empty means auto.
+	XHTTPExtra          json.RawMessage // Server-side XHTTP "extra" settings, client-only keys removed.
 	HttpHeaders         map[string]*conf.StringList
 	Headers             map[string]string
 	NameServerConfig    []*conf.NameServerConfig
@@ -72,6 +84,15 @@ type NodeInfo struct {
 	Security            string
 	Key                 string
 	RejectUnknownSni    bool
+}
+
+// PanelCertConfig is the non-secret part of a panel's per-node certificate
+// config. DNS credentials and pushed certificate contents are never kept.
+type PanelCertConfig struct {
+	Mode     string // http, dns, file, self, content
+	Domain   string
+	Email    string
+	Provider string // DNS provider, dns mode only
 }
 
 type UserInfo struct {
