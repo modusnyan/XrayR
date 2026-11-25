@@ -15,6 +15,18 @@ Endpoints:
 - `/status`: sanitized node state;
 - `/metrics`: Prometheus metrics.
 
+`/status` returns one entry per node:
+
+| Field | Meaning |
+|---|---|
+| `ready` | The node has an inbound and serves users. `false` while the panel has the node disabled. |
+| `users` | Users currently installed on the node. |
+| `last_sync` | Time of the last successful synchronization. |
+| `last_error` | The last synchronization problem, empty when the last round succeeded. A configuration the node rejected stays here until the panel sends a different one, while the node keeps serving the previous configuration; a panel outage clears on the next good round. `node disabled by panel` while the node is switched off. |
+
+The same synchronization state, with host load and the users served, is sent to
+Xboard every push period (`UniProxy/status`) and shows in the panel's node list.
+
 For structured logs:
 
 ```yaml

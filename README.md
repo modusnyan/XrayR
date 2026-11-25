@@ -78,10 +78,12 @@ ExecStart=/usr/local/lib/xrayr/XrayR -c /etc/XrayR/config.yml
 | -------------- | --------------------------------------------------- |
 | 节点 / 用户同步      | 周期性从面板拉取节点配置与用户列表；用 ETag 做增量，面板返回 304 时跳过           |
 | 流量统计与上报        | 按用户统计上下行并回传面板                                       |
-| 在线设备统计与限制      | 按用户限制同时在线 IP 数；支持 Redis 全局设备限制                      |
+| 在线设备统计与限制      | 按用户限制同时在线 IP 数（每个上报周期重新计数）；支持 Redis 全局设备限制          |
+| **状态回传面板**     | 负载（CPU / 内存 / 磁盘）、在线用户、同步状态上报到 Xboard 后台节点列表              |
+| **跟随面板启停**     | 节点在面板被关闭后立即停止服务，重新启用后自动恢复                           |
 | 限速             | 节点级 / 用户级限速；支持超速自动限速（可设警告次数与限速时长）                   |
-| 审计规则           | 面板下发或本地规则文件；命中后上报非法访问                               |
-| TLS 证书         | ACME `http` / `tls` / `dns` 自动申请与续签；证书剩余天数有指标       |
+| 审计规则           | 面板下发（仅 `block` 动作）或本地规则文件；命中即拒绝连接                     |
+| TLS 证书         | ACME `http` / `tls` / `dns` 自动申请与续签；证书剩余天数有指标；与面板证书配置不一致时告警 |
 | 自定义 DNS / 路由   | `dns.json` / `route.json` / 自定义 inbound-outbound    |
 | **配置启动前完整校验**  | 一次返回全部问题，错误信息带字段路径与修复建议                             |
 | **配置热重载**      | 修改配置文件自动生效；新配置无效或启动失败时保留上一份可用配置                     |
@@ -95,8 +97,12 @@ ExecStart=/usr/local/lib/xrayr/XrayR -c /etc/XrayR/config.yml
 | ------------------------------------- | ---------------------------------------------- |
 | `Xboard`（别名 `NewV2board` / `V2board`） | `V2ray`、`Vmess`、`Vless`、`Trojan`、`Shadowsocks` |
 
-- **传输层**：`tcp`、`websocket`、`grpc`、`httpupgrade`、`splithttp` / `xhttp`
-- **安全层**：`none`、`tls`、`reality`
+- **传输层**：`tcp`、`websocket`、`grpc`、`httpupgrade`、`splithttp` / `xhttp`（含面板下发的 `mode` / `extra`）
+- **安全层**：`none`、`tls`、`reality`（REALITY 的 `ws` / `httpupgrade` 组合不可用）
+- **Shadowsocks**：`aes-128-gcm`、`aes-256-gcm`、`chacha20-ietf-poly1305`、`2022-blake3-aes-128-gcm`、`2022-blake3-aes-256-gcm`；
+  插件只支持 simple-obfs 的 `http` 模式，其他插件或 `obfs=tls` 会让节点启动失败
+- **VLESS flow**：留空或 `xtls-rprx-vision`（仅 `tcp`，且需要 TLS / REALITY），以面板配置为准
+- 不支持：`h2` / `kcp` / `quic` 传输、sing-box 多路复用、ECH。对应的 Xboard 已在保存节点时拦截
 - 面板名与协议名大小写不敏感。详见 [docs/panels.md](docs/panels.md) 与 [Xboard 对接文档](docs/dui-jie-xboard/xboard.md)
 
 ## 安装方式
@@ -209,6 +215,10 @@ Diagnostics:
 
 指标包括面板请求成功率、用户数、流量上报失败数、配置重载结果、**证书剩余天数**、**核心健康状态**。  
 完整清单见 [docs/observability.md](docs/observability.md)。
+
+`/status` 的 `last_error` 显示最近一次同步问题：面板下发的配置被拒绝时，节点继续用上一份有效配置运行，
+这条错误会一直保留到面板换了配置为止；节点被面板关闭时为 `node disabled by panel`。
+同样的信息会通过 `UniProxy/status` 上报，在 Xboard 节点列表里显示为黄点。
 
 ### 核心心跳与自愈
 

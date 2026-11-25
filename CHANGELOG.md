@@ -5,6 +5,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-26
+
+The node now follows the panel when it is switched off, tells the panel what it
+serves, and refuses configurations it cannot serve instead of running them with
+parts silently missing. Release it together with the matching Xboard.
+
+### Added
+
+- Node status and online users are reported to Xboard (`UniProxy/status`,
+  `UniProxy/alive`): CPU, memory, swap and disk usage, uptime, the users served
+  and the synchronization state. The panel's node list and its user details show
+  them. An empty online report is sent as well, so the panel's count drops to
+  zero. A panel without these endpoints answers 404, and the report is switched
+  off with a single warning.
+- A node disabled in the panel stops serving. Xboard answers its config and user
+  requests with HTTP 410 and `X-Node-State: disabled` (both are required); the
+  node removes its inbound, deletes its snapshot so a restart during a panel
+  outage cannot revive it, pushes the traffic counted before the shutdown, and
+  is rebuilt from a fresh configuration once the panel enables it again. A node
+  disabled at startup starts offline. Every other panel error keeps the node
+  running as before.
+- XHTTP `mode` and `extra` from the panel reach the inbound. The client-only
+  `downloadSettings` and `xmux` keys are dropped, and empty values mean unset.
+- REALITY `dest` and `xver` set in the panel are honoured.
+- The panel's per-node `cert_config` is compared with the local `CertConfig`,
+  and mismatches are logged once. A TLS node without a local certificate, which
+  listens in plaintext, is flagged. Nothing from the panel's certificate config
+  is applied yet.
+- Shadowsocks simple-obfs is read from `plugin` / `plugin_opts`, the fields the
+  subscriptions hand to clients; `obfs` / `obfs_settings` remain as the legacy
+  form.
+
+### Changed
+
+- A Shadowsocks plugin XrayR cannot serve (v2ray-plugin, `obfs=tls`, ...) fails
+  the node with an explicit error instead of being ignored while every client
+  still uses it. Clean such nodes up in the panel before upgrading: a node
+  without a snapshot will not start, and it takes the other nodes of the process
+  with it.
+- `VlessFlow` is no longer defaulted to `xtls-rprx-vision`. The Xboard adapter
+  never read it: the flow always came from the panel, and a panel flow of `none`
+  now means no flow. A local value is reported as ignored at startup.
+- Routes other than `block` are logged as ignored instead of being dropped
+  silently.
+- A configuration the node rejects stays in diagnostics and in the status report
+  until the panel sends a different one. The panel's next 304 for the same
+  configuration used to clear it after one period. Panel outages still clear on
+  the next good round.
+
+### Fixed
+
+- An empty user list from the panel was treated as an error, so banned and
+  expired users kept their access. It is now applied once the next pull confirms
+  it, which keeps a single bad answer from disconnecting everyone. Snapshots
+  accept an empty list as well.
+- The local `DeviceLimit` never forgot an address. The per-period IP set was
+  only reset by the online-user report, which was switched off, so a user who
+  had used `DeviceLimit` different addresses was refused on every new one until
+  XrayR restarted.
+- XHTTP nodes ignored their Host.
+- The REALITY fallback target was `host:` when the panel's server port was empty
+  (Xboard's default) and `host:443:443` when `dest` already had a port.
+- A rejected node configuration echoed the panel response, which carries the
+  SS-2022 server key and the REALITY private key, into the log and the
+  diagnostics page. Rotate those keys if logs from earlier versions left the
+  node.
+
 ## [1.1.0] - 2026-10-26
 
 The panel now steers what it always could describe but the node ignored.

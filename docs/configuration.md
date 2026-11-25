@@ -21,7 +21,7 @@ Run `XrayR config init -c /etc/XrayR/config.yml` to create a new configuration o
 Fields are displayed conditionally:
 
 - panel selection controls the available node protocols;
-- VLESS flow appears only for VLESS or V2ray with VLESS enabled;
+- VLESS flow appears only for VLESS or V2ray with VLESS enabled. It is ignored for Xboard, where the flow comes from the node in the panel, and is empty by default;
 - certificate fields change between none, existing files and ACME modes;
 - local REALITY fields are hidden when panel-supplied REALITY is selected;
 - fallback entries are available only for Trojan and VLESS;
