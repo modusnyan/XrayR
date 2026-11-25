@@ -49,12 +49,11 @@ type NodeState struct {
 	NodeType  string
 	Timeout   string
 
-	EnableVless         bool
-	VlessFlow           string
-	SpeedLimit          string
-	DeviceLimit         string
-	RuleListPath        string
-	DisableCustomConfig bool
+	EnableVless  bool
+	VlessFlow    string
+	SpeedLimit   string
+	DeviceLimit  string
+	RuleListPath string
 
 	ListenIP             string
 	SendIP               string
@@ -198,7 +197,7 @@ func (n *NodeState) Config() (*panel.NodesConfig, error) {
 		APIHost: n.APIHost, Key: n.APIKey, NodeID: parseInt(n.NodeID), NodeType: n.NodeType,
 		Timeout: parseInt(n.Timeout), EnableVless: n.EnableVless, VlessFlow: n.VlessFlow,
 		SpeedLimit: parseFloat(n.SpeedLimit), DeviceLimit: parseInt(n.DeviceLimit),
-		RuleListPath: n.RuleListPath, DisableCustomConfig: n.DisableCustomConfig,
+		RuleListPath: n.RuleListPath,
 	}
 	ctrl := &controller.Config{
 		ListenIP: n.ListenIP, SendIP: n.SendIP, UpdatePeriodic: parseInt(n.UpdatePeriodic),
@@ -278,7 +277,7 @@ func nodeFromConfig(node *panel.NodesConfig) NodeState {
 		state.APIHost, state.APIKey, state.NodeID, state.NodeType = a.APIHost, a.Key, strconv.Itoa(a.NodeID), a.NodeType
 		state.Timeout, state.EnableVless, state.VlessFlow = strconv.Itoa(a.Timeout), a.EnableVless, a.VlessFlow
 		state.SpeedLimit, state.DeviceLimit = formatFloat(a.SpeedLimit), strconv.Itoa(a.DeviceLimit)
-		state.RuleListPath, state.DisableCustomConfig = a.RuleListPath, a.DisableCustomConfig
+		state.RuleListPath = a.RuleListPath
 	}
 	if node.ControllerConfig == nil {
 		return state
@@ -331,7 +330,7 @@ func nodeFromConfig(node *panel.NodesConfig) NodeState {
 
 func defaultNodeState() NodeState {
 	return NodeState{
-		PanelType: "Xboard", NodeType: "Vless", Timeout: "30", VlessFlow: "xtls-rprx-vision",
+		PanelType: "Xboard", NodeType: "Vless", Timeout: "30",
 		ListenIP: "0.0.0.0", SendIP: "0.0.0.0", UpdatePeriodic: "60", DNSType: "AsIs",
 		CertMode: "none", RealityShow: true, RealityDest: "www.amazon.com:443",
 		RealityProxyProtocolVer: "0", RealityServerNames: "www.amazon.com", RealityMaxTimeDiff: "0",

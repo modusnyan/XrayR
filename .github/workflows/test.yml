@@ -22,8 +22,16 @@ jobs:
         run: test -z "$(gofmt -l $(find . -name '*.go' -not -path './.git/*' -not -path './.claude/*'))"
       - name: Unit tests
         run: go test ./...
+      - name: Race detector
+        run: go test -race ./...
       - name: Vet
         run: go vet ./...
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.14.0
+      - name: Shellcheck
+        run: shellcheck -S warning release/*.sh
       - name: Build
         run: go build ./...
       - name: Validate configuration templates
@@ -31,6 +39,10 @@ jobs:
           go run . config check -c release/config/config.minimal.yml
           go run . config check -c release/config/config.yml.example
           go run . config check -c release/config/config.full.yml
+      - name: Validate the routing template against real rule data
+        run: |
+          bash release/download-rules-dat.sh ./rules
+          RULES_DAT_DIR="$PWD/rules" go test ./panel/ -run TestRuleDataLoads -v
 
   integration:
     if: github.event_name == 'workflow_dispatch'
@@ -42,3 +54,18 @@ jobs:
           go-version: "1.25.3"
       - name: Compile integration tests
         run: go test -run '^$' -tags=integration ./...
+
+  # The unit tests never exercise the panel -> node -> client path. This job stands
+  # up a stub Xboard panel, pushes real traffic through the node with a real
+  # xray-core client, and checks the node switches and rolls back correctly.
+  # It is entirely local, so it needs no secrets and no network.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+          cache: true
+      - name: End-to-end test
+        run: bash tools/e2e/run-e2e.sh

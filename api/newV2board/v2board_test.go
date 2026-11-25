@@ -9,7 +9,9 @@ import (
 	"github.com/XrayR-project/XrayR/api/newV2board"
 )
 
-func CreateClient() api.API {
+// CreateClient returns the concrete client: it no longer satisfies the legacy
+// aggregate api.API because Xboard has no status/online/illegal endpoints.
+func CreateClient() *newV2board.APIClient {
 	apiConfig := &api.Config{
 		APIHost:  "http://localhost:9897",
 		Key:      "qwertyuiopasdfghjkl",

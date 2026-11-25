@@ -1,0 +1,21 @@
+# golangci-lint configuration (schema v2).
+#
+# Run with: golangci-lint run
+#
+# The enabled set is the `standard` group (errcheck, govet, ineffassign,
+# staticcheck, unused). Style linters are deliberately not enabled, so a finding
+# means a real defect: an unchecked error, dead code, an unreachable branch, or
+# an ineffective assignment.
+#
+# errcheck is on. Every error is either handled or discarded explicitly with
+# `_ =`, so a new finding is a new unhandled error rather than noise.
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    generated: lax
+
+formatters:
+  enable:
+    - gofmt

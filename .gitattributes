@@ -1,0 +1,7 @@
+# Shell scripts and systemd units must keep LF endings: they are executed on Linux,
+# and a CRLF checkout makes them fail with "bad interpreter" or stray '\r'.
+*.sh      text eol=lf
+*.service text eol=lf
+
+# Rule data is downloaded by release/download-rules-dat.sh, never diffed.
+*.dat binary

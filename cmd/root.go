@@ -37,38 +37,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "Config file for XrayR.")
 }
 
-func getConfig() *viper.Viper {
-	config := viper.New()
-
-	// Set custom path and name
-	if cfgFile != "" {
-		configName := path.Base(cfgFile)
-		configFileExt := path.Ext(cfgFile)
-		configNameOnly := strings.TrimSuffix(configName, configFileExt)
-		configPath := path.Dir(cfgFile)
-		config.SetConfigName(configNameOnly)
-		config.SetConfigType(strings.TrimPrefix(configFileExt, "."))
-		config.AddConfigPath(configPath)
-		// Set ASSET Path and Config Path for XrayR
-		os.Setenv("XRAY_LOCATION_ASSET", configPath)
-		os.Setenv("XRAY_LOCATION_CONFIG", configPath)
-	} else {
-		// Set default config path
-		config.SetConfigName("config")
-		config.SetConfigType("yml")
-		config.AddConfigPath(".")
-
-	}
-
-	if err := config.ReadInConfig(); err != nil {
-		log.Panicf("Config file error: %s \n", err)
-	}
-
-	config.WatchConfig() // Watch the config
-
-	return config
-}
-
 func run() error {
 	showVersion()
 
@@ -101,6 +69,9 @@ func run() error {
 		if !time.Now().After(lastTime.Add(3 * time.Second)) {
 			return
 		}
+		// Record the attempt even when the new configuration is rejected, so a
+		// burst of invalid writes does not re-run validation on every event.
+		lastTime = time.Now()
 		newResult, loadErr := config.Load(configPath)
 		if loadErr != nil || newResult.HasErrors() {
 			log.WithError(loadErr).Error("New configuration is invalid; continuing with the previous configuration")
@@ -123,8 +94,12 @@ func run() error {
 			log.WithError(err).Error("New configuration failed to start; rolling back to previous configuration")
 			rollback := panel.New(oldConfig)
 			if rollbackErr := rollback.Start(); rollbackErr != nil {
-				log.WithError(rollbackErr).Error("Rollback configuration failed to start")
-				return
+				// Neither the new nor the previous configuration is running, so the
+				// process would otherwise stay alive while serving nothing. Fail loudly
+				// and let the service manager restart us.
+				observability.Reloads.WithLabelValues("failed").Inc()
+				log.WithError(rollbackErr).Error("Rollback configuration failed to start; no node is serving traffic, exiting")
+				os.Exit(1)
 			}
 			p = rollback
 			panelConfig = oldConfig
@@ -133,13 +108,18 @@ func run() error {
 			p = candidate
 			panelConfig = newResult.Config
 		}
-		lastTime = time.Now()
 	})
 
-	defer p.Close()
+	// Capture the panel by reference: a successful reload replaces p, and the panel
+	// that must be closed on shutdown is the one currently running.
+	defer func() {
+		if err := p.Close(); err != nil {
+			log.WithError(err).Warn("Shutdown did not close the panel cleanly")
+		}
+	}()
 	runtime.GC()
 	osSignals := make(chan os.Signal, 1)
-	signal.Notify(osSignals, os.Interrupt, os.Kill, syscall.SIGTERM)
+	signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)
 	<-osSignals
 	return nil
 }

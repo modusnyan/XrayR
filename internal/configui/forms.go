@@ -2,7 +2,6 @@ package configui
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -64,17 +63,13 @@ func nodeGroups(node *NodeState) []*huh.Group {
 		).WithHideFunc(func() bool { return !strings.EqualFold(node.NodeType, "V2ray") }),
 		huh.NewGroup(
 			huh.NewNote().Title("VLESS flow"),
-			huh.NewInput().Title("VLESS flow").Description("Flow setting for VLESS connections.").Value(&node.VlessFlow),
+			huh.NewInput().Title("VLESS flow").Description("Ignored for Xboard: the flow set on the node in the panel is used. Leave empty.").Value(&node.VlessFlow),
 		).WithHideFunc(func() bool { return !isVLESS(node.NodeType, node.EnableVless) }),
 		huh.NewGroup(
 			huh.NewNote().Title("Local limits").Description("Local settings override panel-provided values. Set to 0 to use panel defaults."),
 			huh.NewInput().Title("Local speed limit (Mbps)").Value(&node.SpeedLimit).Validate(validateNonNegativeFloat),
 			huh.NewInput().Title("Local device limit").Value(&node.DeviceLimit).Validate(validateNonNegativeInt),
 			huh.NewInput().Title("Local rule list path").Value(&node.RuleListPath),
-		),
-		huh.NewGroup(
-			huh.NewNote().Title("Panel behavior"),
-			huh.NewConfirm().Title("Disable panel custom configuration?").Description("When enabled the panel custom config will be ignored.").Value(&node.DisableCustomConfig),
 		),
 		huh.NewGroup(
 			huh.NewNote().Title("Controller").Description("Network binding, synchronization, DNS and reporting behavior."),
@@ -216,11 +211,4 @@ func nodeSummary(node NodeState, index int) string {
 		host = "not configured"
 	}
 	return fmt.Sprintf("%d. %s / %s / node %s / %s", index+1, node.PanelType, node.NodeType, id, host)
-}
-
-func integerDescription(value string) string {
-	if _, err := strconv.Atoi(value); err != nil {
-		return "Invalid integer"
-	}
-	return ""
 }

@@ -55,9 +55,13 @@ func (r *Manager) Detect(tag string, destination string, email string) (reject b
 	// If we have some rule for this inbound
 	if value, ok := r.InboundRule.Load(tag); ok {
 		ruleList := value.([]api.DetectRule)
-		for _, r := range ruleList {
-			if r.Pattern.Match([]byte(destination)) {
-				hitRuleID = r.ID
+		// MatchString rather than Match([]byte(destination)): converting inside the
+		// loop allocated once per rule, on every connection. This path runs for
+		// every connection that carries a user, so the waste scaled with the size
+		// of the panel's rule list.
+		for _, detectRule := range ruleList {
+			if detectRule.Pattern.MatchString(destination) {
+				hitRuleID = detectRule.ID
 				reject = true
 				break
 			}

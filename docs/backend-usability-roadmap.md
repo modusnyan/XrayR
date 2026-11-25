@@ -2,7 +2,7 @@
 
 ## 1. 背景
 
-XrayR 当前已经支持多种面板和协议，但用户在部署、配置和排查问题时仍然面临较高门槛。结合 Xboard 对接方式调整过程中暴露的问题，当前主要痛点不是缺少功能，而是用户很难确认以下事项：
+XrayR 当前已经支持 Xboard 面板和多种协议，但用户在部署、配置和排查问题时仍然面临较高门槛。结合 Xboard 对接方式调整过程中暴露的问题，当前主要痛点不是缺少功能，而是用户很难确认以下事项：
 
 1. 配置文件应该如何填写；
 2. 配置内容是否有效、是否真正生效；
@@ -218,12 +218,6 @@ XrayR config check -c /etc/XrayR/config.yml
 
 支持的面板类型：
   Xboard
-  SSPanel
-  PMPanel
-  ProxyPanel
-  V2RaySocks
-  GoV2Panel
-  BunPanel
 ```
 
 面板 API 错误示例：
@@ -596,9 +590,6 @@ $ XrayR config init
 
 选择面板：
   1. Xboard
-  2. SSPanel
-  3. PMPanel
-  4. ProxyPanel
 
 面板地址: https://panel.example.com
 API Key: ********

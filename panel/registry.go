@@ -6,13 +6,7 @@ import (
 	"strings"
 
 	"github.com/XrayR-project/XrayR/api"
-	"github.com/XrayR-project/XrayR/api/bunpanel"
-	"github.com/XrayR-project/XrayR/api/gov2panel"
 	"github.com/XrayR-project/XrayR/api/newV2board"
-	"github.com/XrayR-project/XrayR/api/pmpanel"
-	"github.com/XrayR-project/XrayR/api/proxypanel"
-	"github.com/XrayR-project/XrayR/api/sspanel"
-	"github.com/XrayR-project/XrayR/api/v2raysocks"
 )
 
 // ClientFactory creates a panel client from its API configuration.
@@ -28,41 +22,14 @@ type PanelDefinition struct {
 	Capabilities api.PanelCapabilities
 }
 
+// panelDefinitions lists every panel this build can talk to. Xboard is the only
+// supported panel; the NewV2board and V2board aliases remain because existing
+// configurations and deployments still use those names.
 var panelDefinitions = []PanelDefinition{
-	{
-		Name: "SSpanel", Adapter: "SSpanel", New: func(c *api.Config) api.Client { return sspanel.New(c) },
-		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks", "Shadowsocks-Plugin"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, NodeStatusReport: true, OnlineUserReport: true, IllegalReport: true},
-	},
 	{
 		Name: "Xboard", Adapter: "NewV2board", Aliases: []string{"NewV2board", "V2board"}, New: func(c *api.Config) api.Client { return newV2board.New(c) },
 		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, Shadowsocks2022KeyDerivation: true},
-	},
-	{
-		Name: "PMpanel", Adapter: "PMpanel", New: func(c *api.Config) api.Client { return pmpanel.New(c) },
-		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, OnlineUserReport: true},
-	},
-	{
-		Name: "Proxypanel", Adapter: "Proxypanel", New: func(c *api.Config) api.Client { return proxypanel.New(c) },
-		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, NodeStatusReport: true, OnlineUserReport: true, IllegalReport: true},
-	},
-	{
-		Name: "V2RaySocks", Adapter: "V2RaySocks", New: func(c *api.Config) api.Client { return v2raysocks.New(c) },
-		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, NodeStatusReport: true, OnlineUserReport: true, IllegalReport: true},
-	},
-	{
-		Name: "GoV2Panel", Adapter: "GoV2Panel", New: func(c *api.Config) api.Client { return gov2panel.New(c) },
-		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true},
-	},
-	{
-		Name: "BunPanel", Adapter: "BunPanel", New: func(c *api.Config) api.Client { return bunpanel.New(c) },
-		NodeTypes:    []string{"V2ray", "Vmess", "Vless", "Trojan", "Shadowsocks"},
-		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, OnlineUserReport: true},
+		Capabilities: api.PanelCapabilities{Rules: true, TrafficReport: true, NodeStatusReport: true, OnlineUserReport: true, Shadowsocks2022KeyDerivation: true},
 	},
 }
 

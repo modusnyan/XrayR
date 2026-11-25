@@ -42,15 +42,18 @@ func newDoctorCommand() *cobra.Command {
 				}
 			} else if strings.EqualFold(format, "text") {
 				for _, result := range results {
-					symbol := "✓"
-					if result.Status == preflight.StatusError {
+					var symbol string
+					switch result.Status {
+					case preflight.StatusError:
 						symbol = "✗"
-					} else if result.Status == preflight.StatusWarning {
+					case preflight.StatusWarning:
 						symbol = "!"
+					default:
+						symbol = "✓"
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "%s [%s] %s: %s\n", symbol, result.Section, result.Name, result.Detail)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s [%s] %s: %s\n", symbol, result.Section, result.Name, result.Detail)
 					if result.Suggestion != "" {
-						fmt.Fprintf(cmd.OutOrStdout(), "  Suggestion: %s\n", result.Suggestion)
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Suggestion: %s\n", result.Suggestion)
 					}
 				}
 			} else {

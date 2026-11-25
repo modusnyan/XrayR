@@ -143,7 +143,10 @@ func (p *Panel) loadCore(panelConfig *Config) (*core.Instance, error) {
 		outBoundConfig = append(outBoundConfig, oc)
 	}
 	// Policy config
-	levelPolicyConfig := parseConnectionConfig(panelConfig.ConnectionConfig)
+	levelPolicyConfig, err := parseConnectionConfig(panelConfig.ConnectionConfig)
+	if err != nil {
+		return nil, err
+	}
 	corePolicyConfig := &conf.PolicyConfig{}
 	corePolicyConfig.Levels = map[uint32]*conf.Policy{0: levelPolicyConfig}
 	policyConfig, _ := corePolicyConfig.Build()
@@ -256,14 +259,14 @@ func (p *Panel) closeUnlocked() error {
 	return closeErr
 }
 
-func parseConnectionConfig(c *ConnectionConfig) (policy *conf.Policy) {
+func parseConnectionConfig(c *ConnectionConfig) (*conf.Policy, error) {
 	connectionConfig := getDefaultConnectionConfig()
 	if c != nil {
 		if _, err := diff.Merge(connectionConfig, c, connectionConfig); err != nil {
-			log.Panicf("Read ConnectionConfig failed: %s", err)
+			return nil, fmt.Errorf("read ConnectionConfig: %w", err)
 		}
 	}
-	policy = &conf.Policy{
+	policy := &conf.Policy{
 		StatsUserUplink:   true,
 		StatsUserDownlink: true,
 		Handshake:         &connectionConfig.Handshake,
@@ -273,5 +276,5 @@ func parseConnectionConfig(c *ConnectionConfig) (policy *conf.Policy) {
 		BufferSize:        &connectionConfig.BufferSize,
 	}
 
-	return
+	return policy, nil
 }

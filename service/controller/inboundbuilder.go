@@ -23,12 +23,8 @@ import (
 func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.InboundHandlerConfig, error) {
 	inboundDetourConfig := &conf.InboundDetourConfig{}
 	// Build Listen IP address
-	if nodeInfo.NodeType == "Shadowsocks-Plugin" {
-		// Shdowsocks listen in 127.0.0.1 for safety
-		inboundDetourConfig.ListenOn = &conf.Address{Address: net.ParseAddress("127.0.0.1")}
-	} else if config.ListenIP != "" {
-		ipAddress := net.ParseAddress(config.ListenIP)
-		inboundDetourConfig.ListenOn = &conf.Address{Address: ipAddress}
+	if config.ListenIP != "" {
+		inboundDetourConfig.ListenOn = &conf.Address{Address: net.ParseAddress(config.ListenIP)}
 	}
 
 	// Build Port
@@ -60,12 +56,23 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 	case "V2ray", "Vmess", "Vless":
 		if nodeInfo.EnableVless || (nodeInfo.NodeType == "Vless" && nodeInfo.NodeType != "Vmess") {
 			protocol = "vless"
+			// The panel may enable VLESS Encryption and hand over the server
+			// private key as the decryption string. xray-core rejects an empty
+			// decryption, and rejects any decryption other than "none" together
+			// with fallbacks, so resolve both constraints here.
+			decryption := nodeInfo.Decryption
+			if decryption == "" {
+				decryption = "none"
+			}
 			// Enable fallback
 			if config.EnableFallback {
 				fallbackConfigs, err := buildVlessFallbacks(config.FallBackConfigs)
 				if err == nil {
+					if decryption != "none" {
+						return nil, fmt.Errorf("vless decryption %q cannot be combined with fallbacks; disable EnableFallback or turn off VLESS Encryption in the panel", decryption)
+					}
 					proxySetting = &conf.VLessInboundConfig{
-						Decryption: "none",
+						Decryption: decryption,
 						Fallbacks:  fallbackConfigs,
 					}
 				} else {
@@ -73,7 +80,7 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 				}
 			} else {
 				proxySetting = &conf.VLessInboundConfig{
-					Decryption: "none",
+					Decryption: decryption,
 				}
 			}
 		} else {
@@ -95,7 +102,7 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 		} else {
 			proxySetting = &conf.TrojanServerConfig{}
 		}
-	case "Shadowsocks", "Shadowsocks-Plugin":
+	case "Shadowsocks":
 		protocol = "shadowsocks"
 		cipher := strings.ToLower(nodeInfo.CypherMethod)
 
@@ -111,6 +118,16 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 		rand.Read(b)
 		randPasswd := hex.EncodeToString(b)
 		if C.Contains(shadowaead_2022.List, cipher) {
+			// The entry below is what puts xray-core into SS-2022 multi-user mode,
+			// which XrayR needs because it adds and removes one account per panel
+			// user and only the multi-user inbound implements proxy.UserManager.
+			// That mode accepts blake3-aes-*-gcm only; anything else fails deep
+			// inside xray-core with "shadowsocks 2022 (multi-user): only
+			// blake3-aes-*-gcm methods are supported", which says what is wrong
+			// but not what to change. Reject it here with the fix instead.
+			if !strings.Contains(cipher, "aes") {
+				return nil, fmt.Errorf("shadowsocks cipher %q cannot be used for a node: SS-2022 multi-user requires a blake3-aes-*-gcm method because every panel user needs their own key; use \"2022-blake3-aes-128-gcm\" or \"2022-blake3-aes-256-gcm\", or set the node to a non-2022 cipher", cipher)
+			}
 			proxySetting.Users = append(proxySetting.Users, &conf.ShadowsocksUserConfig{
 				Password: base64.StdEncoding.EncodeToString(b),
 			})
@@ -124,17 +141,8 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 			proxySetting.IVCheck = false
 		}
 
-	case "dokodemo-door":
-		protocol = "dokodemo-door"
-		proxySetting = struct {
-			Host        string   `json:"address"`
-			NetworkList []string `json:"network"`
-		}{
-			Host:        "v1.mux.cool",
-			NetworkList: []string{"tcp", "udp"},
-		}
 	default:
-		return nil, fmt.Errorf("unsupported node type: %s, Only support: V2ray, Trojan, Shadowsocks, and Shadowsocks-Plugin", nodeInfo.NodeType)
+		return nil, fmt.Errorf("unsupported node type: %s; supported: V2ray, Vmess, Vless, Trojan, Shadowsocks", nodeInfo.NodeType)
 	}
 
 	setting, err := json.Marshal(proxySetting)
@@ -184,48 +192,68 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo, tag string) (*core.I
 		}
 		streamSetting.HTTPUPGRADESettings = httpupgradeSettings
 	case "splithttp", "xhttp":
+		// xray-core unmarshals Extra into the full XHTTP config and then puts
+		// host, path and mode back from the fields here, so the panel's padding,
+		// post-size and header settings reach the server.
 		splithttpSetting := &conf.SplitHTTPConfig{
-			Path: nodeInfo.Path,
-			Host: nodeInfo.Host,
+			Path:  nodeInfo.Path,
+			Host:  nodeInfo.Host,
+			Mode:  nodeInfo.XHTTPMode,
+			Extra: nodeInfo.XHTTPExtra,
 		}
 		streamSetting.SplitHTTPSettings = splithttpSetting
 	}
 	streamSetting.Network = &transportProtocol
 
-	// Build TLS and REALITY settings
-	var isREALITY bool
-	if config.DisableLocalREALITYConfig {
-		if nodeInfo.REALITYConfig != nil && nodeInfo.EnableREALITY {
-			isREALITY = true
-			streamSetting.Security = "reality"
+	// Build TLS and REALITY settings.
+	//
+	// REALITY belongs to the node configuration the panel owns: when a node is
+	// REALITY the panel also supplies dest, server names, private key and short
+	// ids, and those are exactly the values it hands to every client. The panel
+	// therefore wins whenever it describes REALITY -- using local values there
+	// would give the server one reality and the clients another. Local settings
+	// remain a fallback for nodes whose panel does not describe REALITY at all.
+	//
+	// Two bugs came from the old precedence. "Not configured locally" was treated
+	// as "no REALITY", so the default setup silently listened as plain VLESS; and
+	// the panel branch read config.REALITYConfigs.Show without checking for nil.
+	panelREALITY := nodeInfo.EnableREALITY && nodeInfo.REALITYConfig != nil
+	localREALITY := !panelREALITY && !config.DisableLocalREALITYConfig &&
+		config.EnableREALITY && config.REALITYConfigs != nil
 
-			r := nodeInfo.REALITYConfig
-			streamSetting.REALITYSettings = &conf.REALITYConfig{
-				Show:         config.REALITYConfigs.Show,
-				Dest:         []byte(`"` + r.Dest + `"`),
-				Xver:         r.ProxyProtocolVer,
-				ServerNames:  r.ServerNames,
-				PrivateKey:   r.PrivateKey,
-				MinClientVer: r.MinClientVer,
-				MaxClientVer: r.MaxClientVer,
-				MaxTimeDiff:  r.MaxTimeDiff,
-				ShortIds:     r.ShortIds,
-			}
-		}
-	} else if config.EnableREALITY && config.REALITYConfigs != nil {
+	var isREALITY bool
+	switch {
+	case panelREALITY:
 		isREALITY = true
 		streamSetting.Security = "reality"
 
+		r := nodeInfo.REALITYConfig
 		streamSetting.REALITYSettings = &conf.REALITYConfig{
-			Show:         config.REALITYConfigs.Show,
-			Dest:         []byte(`"` + config.REALITYConfigs.Dest + `"`),
-			Xver:         config.REALITYConfigs.ProxyProtocolVer,
-			ServerNames:  config.REALITYConfigs.ServerNames,
-			PrivateKey:   config.REALITYConfigs.PrivateKey,
-			MinClientVer: config.REALITYConfigs.MinClientVer,
-			MaxClientVer: config.REALITYConfigs.MaxClientVer,
-			MaxTimeDiff:  config.REALITYConfigs.MaxTimeDiff,
-			ShortIds:     config.REALITYConfigs.ShortIds,
+			Show:         realityShow(config),
+			Dest:         []byte(`"` + r.Dest + `"`),
+			Xver:         r.ProxyProtocolVer,
+			ServerNames:  r.ServerNames,
+			PrivateKey:   r.PrivateKey,
+			MinClientVer: r.MinClientVer,
+			MaxClientVer: r.MaxClientVer,
+			MaxTimeDiff:  r.MaxTimeDiff,
+			ShortIds:     r.ShortIds,
+		}
+	case localREALITY:
+		isREALITY = true
+		streamSetting.Security = "reality"
+
+		r := config.REALITYConfigs
+		streamSetting.REALITYSettings = &conf.REALITYConfig{
+			Show:         r.Show,
+			Dest:         []byte(`"` + r.Dest + `"`),
+			Xver:         r.ProxyProtocolVer,
+			ServerNames:  r.ServerNames,
+			PrivateKey:   r.PrivateKey,
+			MinClientVer: r.MinClientVer,
+			MaxClientVer: r.MaxClientVer,
+			MaxTimeDiff:  r.MaxTimeDiff,
+			ShortIds:     r.ShortIds,
 		}
 	}
 
@@ -340,4 +368,14 @@ func buildTrojanFallbacks(fallbackConfigs []*FallBackConfig) ([]*conf.TrojanInbo
 		}
 	}
 	return trojanFallBacks, nil
+}
+
+// realityShow reports whether xray-core should log REALITY debugging detail.
+// It is the only field taken from the local settings when the panel supplies the
+// REALITY parameters, so ControllerConfig.REALITYConfigs may legitimately be nil.
+func realityShow(config *Config) bool {
+	if config.REALITYConfigs == nil {
+		return false
+	}
+	return config.REALITYConfigs.Show
 }

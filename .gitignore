@@ -13,9 +13,20 @@ go.work
 main
 XrayR
 XrayR*
+# ...but the systemd unit is a tracked source file, not a build artifact.
+!release/systemd/XrayR.service
 access.log
 error.log
 .lego
 cert
 config.yml
 site/
+
+# Rule data is downloaded on every install by release/download-rules-dat.sh
+release/config/*.dat
+release/config/*.dat.tmp
+/rules/
+
+# Local WorkBuddy workspace data
+.workbuddy-ai/
+.workbuddy/

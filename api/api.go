@@ -14,6 +14,16 @@ type RuleProvider interface {
 	GetNodeRule() (*[]DetectRule, error)
 }
 
+// IntervalsProvider exposes the sync intervals the panel wants the node to use
+// (Xboard's base_config.push_interval / pull_interval, in seconds). A value <= 0
+// means "not provided"; the controller then keeps its locally configured period.
+type IntervalsProvider interface {
+	// PullInterval is how often the node should pull node/user config.
+	PullInterval() int
+	// PushInterval is how often the node should report traffic and status.
+	PushInterval() int
+}
+
 // TrafficReporter reports per-user traffic to a panel.
 type TrafficReporter interface {
 	ReportUserTraffic(*[]UserTraffic) error
@@ -32,6 +42,14 @@ type OnlineUserReporter interface {
 // IllegalReporter reports audit-rule matches to a panel.
 type IllegalReporter interface {
 	ReportIllegal(*[]DetectResult) error
+}
+
+// CertConfigProvider exposes the certificate setup the panel describes for the
+// node. XrayR does not apply it (TLS uses the local ControllerConfig.CertConfig);
+// the controller only compares the two and warns about mismatches.
+type CertConfigProvider interface {
+	// PanelCertConfig returns nil when the panel sends no certificate config.
+	PanelCertConfig() *PanelCertConfig
 }
 
 // Closer is implemented by clients with background resources.

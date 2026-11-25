@@ -83,7 +83,6 @@ type configInitOptions struct {
 	fallbackDest         string
 	fallbackProxyVer     uint64
 	ruleListPath         string
-	disableCustomConfig  bool
 	disableUploadTraffic bool
 	disableGetRule       bool
 	disableIVCheck       bool
@@ -130,8 +129,8 @@ func newConfigInitCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Configuration written to %s\n", options.output)
-			fmt.Fprintf(cmd.OutOrStdout(), "Configured %d node(s). Next: systemctl enable --now XrayR\n", len(cfg.NodesConfig))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Configuration written to %s\n", options.output)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Configured %d node(s). Next: systemctl enable --now XrayR\n", len(cfg.NodesConfig))
 			return nil
 		},
 	}
@@ -156,7 +155,6 @@ func runConfigInitNonInteractive(cmd *cobra.Command, o *configInitOptions) error
 		APIHost: o.apiHost, Key: o.apiKey, NodeID: o.nodeID, NodeType: nodeType,
 		Timeout: 30, EnableVless: o.enableVless, VlessFlow: o.vlessFlow,
 		SpeedLimit: o.speedLimit, DeviceLimit: o.deviceLimit, RuleListPath: o.ruleListPath,
-		DisableCustomConfig: o.disableCustomConfig,
 	}
 	ctrl := &controller.Config{
 		ListenIP: o.listenIP, SendIP: o.sendIP, UpdatePeriodic: o.updatePeriodic,
@@ -230,8 +228,8 @@ func runConfigInitNonInteractive(cmd *cobra.Command, o *configInitOptions) error
 		}
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Configuration written to %s\n", o.output)
-	fmt.Fprintln(cmd.OutOrStdout(), "✓ Local validation passed")
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Configuration written to %s\n", o.output)
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "✓ Local validation passed")
 	if !o.skipDoctor {
 		results := preflight.Run(context.Background(), cfg, preflight.Options{Node: -1, Timeout: 5 * time.Second, Remote: !o.skipVerify})
 		failed := false
@@ -239,14 +237,14 @@ func runConfigInitNonInteractive(cmd *cobra.Command, o *configInitOptions) error
 			if result.Status == preflight.StatusError {
 				failed = true
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s: %s\n", result.Status, result.Name, result.Detail)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "[%s] %s: %s\n", result.Status, result.Name, result.Detail)
 		}
 		if failed {
 			return errors.New("configuration was written, but verification failed; run XrayR doctor for details")
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "✓ Doctor checks passed")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "✓ Doctor checks passed")
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Next: systemctl enable --now XrayR (config: %s)\n", o.output)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Next: systemctl enable --now XrayR (config: %s)\n", o.output)
 	return nil
 }
 
@@ -302,7 +300,6 @@ func bindConfigInitFlags(command *cobra.Command, o *configInitOptions) {
 	flags.StringVar(&o.fallbackPath, "fallback-path", "", "Fallback HTTP path")
 	flags.Uint64Var(&o.fallbackProxyVer, "fallback-proxy-protocol-ver", 0, "Fallback PROXY protocol version")
 	flags.StringVar(&o.ruleListPath, "rule-list-path", "", "Rule list path")
-	flags.BoolVar(&o.disableCustomConfig, "disable-custom-config", false, "Disable panel custom config")
 	flags.BoolVar(&o.disableUploadTraffic, "disable-upload-traffic", false, "Disable traffic upload")
 	flags.BoolVar(&o.disableGetRule, "disable-get-rule", false, "Disable rule synchronization")
 	flags.BoolVar(&o.disableIVCheck, "disable-iv-check", false, "Disable Shadowsocks IV check")

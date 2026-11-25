@@ -27,71 +27,43 @@ jobs:
 
   build:
     strategy:
+      # Linux only. install.sh is the supported way to deploy and it maps exactly
+      # these architectures to release assets, so build the ones it can fetch
+      # rather than a dozen nobody downloads. Adding a target here means adding its
+      # friendly name to .github/build/friendly-filenames.json and its ASSET to
+      # release/install.sh in the same change.
       matrix:
-        # Include amd64 on all platforms.
-        goos: [ windows, freebsd, openbsd, linux, darwin ]
-        goarch: [ amd64, 386 ]
-        exclude:
-          # Exclude i386 on darwin.
-          - goarch: 386
-            goos: darwin
-          - goarch: 386
-            goos: openbsd
         include:
-          # BEIGIN MacOS ARM64
-          - goos: darwin
+          # linux-64
+          - goos: linux
+            goarch: amd64
+          # linux-32
+          - goos: linux
+            goarch: 386
+          # linux-arm64-v8a
+          - goos: linux
             goarch: arm64
-          # END MacOS ARM64
-          # BEGIN Linux ARM 5 6 7
+          # linux-arm32-v7a
           - goos: linux
             goarch: arm
             goarm: 7
+          # linux-arm32-v6
           - goos: linux
             goarch: arm
             goarm: 6
+          # linux-arm32-v5
           - goos: linux
             goarch: arm
             goarm: 5
-          # END Linux ARM 5 6 7
-          # BEGIN Android ARM 8
-          - goos: android
-            goarch: arm64
-          # END Android ARM 8
-          # BEGIN Other architectures
-          # BEGIN riscv64 & ARM64
-          - goos: linux
-            goarch: arm64
+          # linux-riscv64
           - goos: linux
             goarch: riscv64
-          # END riscv64 & ARM64
-          # BEGIN MIPS
-          - goos: linux
-            goarch: mips64
-          - goos: linux
-            goarch: mips64le
-          - goos: linux
-            goarch: mipsle
-          - goos: linux
-            goarch: mips
-          # END MIPS
-          # BEGIN PPC
-          # - goos: linux # Removed due to the unsupport of shirou/gopsutil 
-          #   goarch: ppc64
-          - goos: linux
-            goarch: ppc64le
-          # END PPC
-          # BEGIN FreeBSD ARM
-          - goos: freebsd
-            goarch: arm64
-          - goos: freebsd
-            goarch: arm
-            goarm: 7
-          # END FreeBSD ARM
-          # BEGIN S390X
+          # linux-s390x
           - goos: linux
             goarch: s390x
-          # END S390X
-          # END Other architectures
+          # linux-ppc64le
+          - goos: linux
+            goarch: ppc64le
       fail-fast: false
 
     runs-on: ubuntu-latest
@@ -102,7 +74,7 @@ jobs:
       CGO_ENABLED: 0
     steps:
       - name: Checkout codebase
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Show workflow information
         id: get_filename
         run: |
@@ -112,7 +84,7 @@ jobs:
           echo "ASSET_NAME=$_NAME" >> $GITHUB_ENV
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
           go-version: "1.25.3"
 
@@ -124,16 +96,6 @@ jobs:
         run: |
           mkdir -p build_assets
           go build -v -o build_assets/XrayR -trimpath -ldflags "-s -w -buildid="
-
-      - name: Build Mips softfloat XrayR
-        if: matrix.goarch == 'mips' || matrix.goarch == 'mipsle'
-        run: |
-          GOMIPS=softfloat go build -v -o build_assets/XrayR_softfloat -trimpath -ldflags "-s -w -buildid="
-      - name: Rename Windows XrayR
-        if: matrix.goos == 'windows'
-        run: |
-          cd ./build_assets || exit 1
-          mv XrayR XrayR.exe
 
       - name: Prepare to release
         uses: nick-fields/retry@v2
@@ -152,18 +114,10 @@ jobs:
             cp ${GITHUB_WORKSPACE}/release/config/config.yml.example ./build_assets/config.yml
             cp ${GITHUB_WORKSPACE}/release/config/config.minimal.yml ./build_assets/config.minimal.yml
             cp ${GITHUB_WORKSPACE}/release/config/config.full.yml ./build_assets/config.full.yml
-            LIST=('geoip geoip geoip' 'domain-list-community dlc geosite')
-            for i in "${LIST[@]}"
-            do
-              INFO=($(echo $i | awk 'BEGIN{FS=" ";OFS=" "} {print $1,$2,$3}'))
-              DOWNLOAD_URL="https://raw.githubusercontent.com/v2fly/${INFO[0]}/release/${INFO[1]}.dat"
-              FILE_NAME="${INFO[2]}.dat"
-              echo -e "Downloading ${DOWNLOAD_URL}..."
-              curl -L "${DOWNLOAD_URL}" -o ./build_assets/${FILE_NAME}
-              echo -e "Verifying HASH key..."
-              HASH="$(curl -sL "${DOWNLOAD_URL}.sha256sum" | awk -F ' ' '{print $1}')"
-              [ "$(sha256sum "./build_assets/${FILE_NAME}" | awk -F ' ' '{print $1}')" == "${HASH}" ] || { echo -e "The HASH key of ${FILE_NAME} does not match cloud one."; exit 1; }
-            done
+            cp ${GITHUB_WORKSPACE}/release/config/config.template.yml ./build_assets/config.template.yml
+            cp ${GITHUB_WORKSPACE}/release/install.sh ./build_assets/install.sh
+            cp ${GITHUB_WORKSPACE}/release/download-rules-dat.sh ./build_assets/download-rules-dat.sh
+            bash ${GITHUB_WORKSPACE}/release/download-rules-dat.sh ./build_assets
       - name: Create ZIP archive
         shell: bash
         run: |

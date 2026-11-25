@@ -15,25 +15,24 @@ ConnectionConfig:
   DownlinkOnly: 4 # Time limit when the connection is closed after the uplink is closed, Second
   BufferSize: 64 # The internal cache size of each connection, kB
 Nodes:
-  - PanelType: "SSpanel" # Panel type: SSpanel, NewV2board, PMpanel, Proxypanel, V2RaySocks, GoV2Panel, BunPanel, Xboard
+  - PanelType: "Xboard" # Panel type: Xboard (aliases: NewV2board, V2board)
     ApiConfig:
       ApiHost: "http://127.0.0.1:667"
       ApiKey: "123"
       NodeID: 41
-      NodeType: V2ray # Node type: V2ray, Vmess, Vless, Shadowsocks, Trojan, Shadowsocks-Plugin
+      NodeType: V2ray # Node type: V2ray, Vmess, Vless, Shadowsocks, Trojan
       Timeout: 30 # Timeout for the api request
       EnableVless: false # Enable Vless for V2ray Type
-      VlessFlow: "xtls-rprx-vision" # Only support vless
+      # VlessFlow is ignored for Xboard: the node uses the flow set on the node in the panel.
       SpeedLimit: 0 # Mbps, Local settings will replace remote settings, 0 means disable
       DeviceLimit: 0 # Local settings will replace remote settings, 0 means disable
       RuleListPath: # /etc/XrayR/rulelist Path to local rulelist file
-      DisableCustomConfig: false # disable custom config for sspanel
     ControllerConfig:
       ListenIP: 0.0.0.0 # IP address you want to listen
       SendIP: 0.0.0.0 # IP address you want to send pacakage
       UpdatePeriodic: 60 # Time to update the nodeinfo, how many sec.
-      EnableDNS: false # Use custom DNS config, Please ensure that you set the dns.json well
-      DNSType: AsIs # AsIs, UseIP, UseIPv4, UseIPv6, DNS strategy
+      EnableDNS: false # Switch the outbound domain strategy from Asis to DNSType
+      DNSType: AsIs # AsIs, UseIP, UseIPv4, UseIPv6
       EnableProxyProtocol: false # Only works for WebSocket and TCP
       AutoSpeedLimitConfig:
         Limit: 0 # Warned speed. Set to 0 to disable AutoSpeedLimit (mbps)
@@ -56,8 +55,12 @@ Nodes:
           Path: # HTTP PATH, Empty for any
           Dest: 80 # Required, Destination of fallback, check https://xtls.github.io/config/features/fallback.html for details.
           ProxyProtocolVer: 0 # Send PROXY protocol version, 0 for disable
-      DisableLocalREALITYConfig: false  # disable local reality config
-      EnableREALITY: false # Enable REALITY
+      # REALITY comes from the panel: a node whose TLS type is 2 supplies
+      # dest / server_name / private_key / short_id, so nothing below is needed and
+      # the panel's values always win. The block is only a fallback for a node the
+      # panel does not describe as REALITY.
+      DisableLocalREALITYConfig: false  # true = never build REALITY from the block below
+      EnableREALITY: false # Fallback REALITY when the panel does not supply it
       REALITYConfigs:
         Show: true # Show REALITY debug
         Dest: www.amazon.com:443 # Required, Same as fallback
@@ -82,15 +85,15 @@ Nodes:
           ALICLOUD_ACCESS_KEY: aaa
           ALICLOUD_SECRET_KEY: bbb
 
-#  - PanelType: "SSpanel" # Panel type: SSpanel, V2board, NewV2board, PMpanel, Proxypanel, V2RaySocks, GoV2Panel
+#  - PanelType: "Xboard" # Panel type: Xboard (aliases: NewV2board, V2board)
 #    ApiConfig:
 #      ApiHost: "http://127.0.0.1:668"
 #      ApiKey: "123"
 #      NodeID: 41
-#      NodeType: V2ray # Node type: V2ray, Shadowsocks, Trojan, Shadowsocks-Plugin
+#      NodeType: V2ray # Node type: V2ray, Shadowsocks, Trojan
 #      Timeout: 30 # Timeout for the api request
 #      EnableVless: false # Enable Vless for V2ray Type
-#      VlessFlow: "xtls-rprx-vision" # Only support vless
+#      # VlessFlow is ignored for Xboard: the node uses the flow set on the node in the panel.
 #      SpeedLimit: 0 # Mbps, Local settings will replace remote settings, 0 means disable
 #      DeviceLimit: 0 # Local settings will replace remote settings, 0 means disable
 #      RuleListPath: # /etc/XrayR/rulelist Path to local rulelist file
@@ -98,8 +101,8 @@ Nodes:
 #      ListenIP: 0.0.0.0 # IP address you want to listen
 #      SendIP: 0.0.0.0 # IP address you want to send pacakage
 #      UpdatePeriodic: 60 # Time to update the nodeinfo, how many sec.
-#      EnableDNS: false # Use custom DNS config, Please ensure that you set the dns.json well
-#      DNSType: AsIs # AsIs, UseIP, UseIPv4, UseIPv6, DNS strategy
+#      EnableDNS: false # Switch the outbound domain strategy from Asis to DNSType
+#      DNSType: AsIs # AsIs, UseIP, UseIPv4, UseIPv6
 #      EnableProxyProtocol: false # Only works for WebSocket and TCP
 #      AutoSpeedLimitConfig:
 #        Limit: 0 # Warned speed. Set to 0 to disable AutoSpeedLimit (mbps)

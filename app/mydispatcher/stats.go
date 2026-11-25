@@ -21,5 +21,6 @@ func (w *SizeStatWriter) Close() error {
 }
 
 func (w *SizeStatWriter) Interrupt() {
-	common.Interrupt(w.Writer)
+	// Interrupt is best-effort teardown; there is nothing to report to the caller.
+	_ = common.Interrupt(w.Writer)
 }

@@ -7,11 +7,13 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
       - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
@@ -26,15 +28,22 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # setup-python only looks for **/requirements.txt and **/pyproject.toml by
+          # default; this repo names the file requirements-docs.txt.
+          cache-dependency-path: requirements-docs.txt
       - run: pip install -r requirements-docs.txt
       - run: mkdocs build --strict
       - uses: actions/upload-pages-artifact@v3
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && vars.ENABLE_PAGES == 'true'
         with:
           path: site
 
   deploy:
-    if: github.event_name == 'push'
+    # Publishing to GitHub Pages needs Pages enabled and a `github-pages`
+    # environment, which a fork usually does not have. Opt in by setting the
+    # repository variable ENABLE_PAGES to true; the build job always runs, so the
+    # docs are still validated either way.
+    if: github.event_name == 'push' && vars.ENABLE_PAGES == 'true'
     needs: build
     runs-on: ubuntu-latest
     permissions:

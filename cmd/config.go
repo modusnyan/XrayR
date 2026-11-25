@@ -71,7 +71,7 @@ func newConfigShowCommand() *cobra.Command {
 				return encoder.Encode(view)
 			case "yaml", "yml":
 				encoder := yaml.NewEncoder(cmd.OutOrStdout())
-				defer encoder.Close()
+				defer func() { _ = encoder.Close() }()
 				return encoder.Encode(view)
 			default:
 				return fmt.Errorf("unsupported format %q; use yaml or json", format)
@@ -99,7 +99,7 @@ func newConfigMigrateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 			data, issues, err := xconfig.Migrate(file)
 			if err != nil {
 				return err
@@ -111,9 +111,9 @@ func newConfigMigrateCommand() *cobra.Command {
 				return err
 			}
 			for _, issue := range issues {
-				fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s: %s\n", issue.Severity, issue.Path, issue.Message)
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s: %s\n", issue.Severity, issue.Path, issue.Message)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Migrated configuration written to %s\n", output)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Migrated configuration written to %s\n", output)
 			return nil
 		},
 	}
@@ -123,11 +123,33 @@ func newConfigMigrateCommand() *cobra.Command {
 	return command
 }
 
+// installedConfigPath is where the installer puts the configuration and localConfigPath
+// is the working-directory fallback used when running from a checkout.
+const (
+	installedConfigPath = "/etc/XrayR/config.yml"
+	localConfigPath     = "config.yml"
+)
+
+// resolveConfigPath picks the configuration file to read. An explicit -c always wins;
+// otherwise the installed location is preferred over the working directory, so running
+// the binary bare on an installed node finds the config the service uses instead of
+// failing with "open config.yml: no such file or directory".
 func resolveConfigPath() string {
 	if cfgFile != "" {
 		return cfgFile
 	}
-	return "config.yml"
+	return firstExisting(installedConfigPath, localConfigPath)
+}
+
+// firstExisting returns the first candidate that exists. When none do it returns the
+// last one, so the resulting error names the location an installed node would use.
+func firstExisting(candidates ...string) string {
+	for _, candidate := range candidates[:len(candidates)-1] {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return candidates[len(candidates)-1]
 }
 
 func printIssues(writer io.Writer, format string, result xconfig.Result) error {
@@ -144,17 +166,17 @@ func printIssues(writer io.Writer, format string, result xconfig.Result) error {
 		return fmt.Errorf("unsupported format %q; use text or json", format)
 	}
 	if len(result.Issues) == 0 {
-		fmt.Fprintln(writer, "✓ Configuration is valid")
+		_, _ = fmt.Fprintln(writer, "✓ Configuration is valid")
 		return nil
 	}
 	for _, issue := range result.Issues {
-		fmt.Fprintf(writer, "%s: %s: %s\n", strings.ToUpper(string(issue.Severity)), issue.Path, issue.Message)
+		_, _ = fmt.Fprintf(writer, "%s: %s: %s\n", strings.ToUpper(string(issue.Severity)), issue.Path, issue.Message)
 		if issue.Suggestion != "" {
-			fmt.Fprintf(writer, "  Suggestion: %s\n", issue.Suggestion)
+			_, _ = fmt.Fprintf(writer, "  Suggestion: %s\n", issue.Suggestion)
 		}
 	}
 	if !result.HasErrors() {
-		fmt.Fprintln(writer, "✓ Configuration is valid with warnings")
+		_, _ = fmt.Fprintln(writer, "✓ Configuration is valid with warnings")
 	}
 	return nil
 }

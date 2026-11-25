@@ -178,23 +178,33 @@ func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *r
 			deviceLimit = u.DeviceLimit
 		}
 
-		// Local device limit
-		ipMap := new(sync.Map)
-		ipMap.Store(ip, uid)
-		// If any device is online
-		if v, ok := inboundInfo.UserOnlineIP.LoadOrStore(email, ipMap); ok {
-			ipMap := v.(*sync.Map)
-			// If this is a new ip
-			if _, ok := ipMap.LoadOrStore(ip, uid); !ok {
-				counter := 0
-				ipMap.Range(func(key, value interface{}) bool {
-					counter++
-					return true
-				})
-				if counter > deviceLimit && deviceLimit > 0 {
-					ipMap.Delete(ip)
-					return nil, false, true
-				}
+		// Local device limit. Load before allocating: the user usually already has
+		// an entry, and LoadOrStore would build a sync.Map that is then thrown
+		// away. This runs for every connection that carries a user.
+		onlineIP, loaded := inboundInfo.UserOnlineIP.Load(email)
+		var devices *sync.Map
+		if loaded {
+			devices = onlineIP.(*sync.Map)
+		} else {
+			candidate := new(sync.Map)
+			candidate.Store(ip, uid)
+			if existing, stored := inboundInfo.UserOnlineIP.LoadOrStore(email, candidate); stored {
+				devices = existing.(*sync.Map)
+			} else {
+				devices = candidate
+			}
+		}
+		// A brand new user is recorded without a count check, matching the
+		// previous behaviour.
+		if _, isNewIP := devices.LoadOrStore(ip, uid); !isNewIP {
+			counter := 0
+			devices.Range(func(key, value interface{}) bool {
+				counter++
+				return true
+			})
+			if counter > deviceLimit && deviceLimit > 0 {
+				devices.Delete(ip)
+				return nil, false, true
 			}
 		}
 
@@ -207,17 +217,19 @@ func (l *Limiter) GetUserBucket(tag string, email string, ip string) (limiter *r
 
 		// Speed limit
 		limit := determineRate(nodeLimit, userLimit) // Determine the speed limit rate
-		if limit > 0 {
-			limiter := rate.NewLimiter(rate.Limit(limit), int(limit)) // Byte/s
-			if v, ok := inboundInfo.BucketHub.LoadOrStore(email, limiter); ok {
-				bucket := v.(*rate.Limiter)
-				return bucket, true, false
-			} else {
-				return limiter, true, false
-			}
-		} else {
+		if limit == 0 {
 			return nil, false, false
 		}
+		// Load before allocating, so an existing bucket is not shadowed by a
+		// throwaway limiter on every connection.
+		if v, ok := inboundInfo.BucketHub.Load(email); ok {
+			return v.(*rate.Limiter), true, false
+		}
+		candidate := rate.NewLimiter(rate.Limit(limit), int(limit)) // Byte/s
+		if v, stored := inboundInfo.BucketHub.LoadOrStore(email, candidate); stored {
+			return v.(*rate.Limiter), true, false
+		}
+		return candidate, true, false
 	} else {
 		errors.LogDebug(context.Background(), "Get Inbound Limiter information failed")
 		return nil, false, false

@@ -61,9 +61,6 @@ func ApplyDefaults(cfg *panel.Config, configDir string) {
 			if node.ApiConfig.Timeout == 0 {
 				node.ApiConfig.Timeout = 5
 			}
-			if node.ApiConfig.VlessFlow == "" {
-				node.ApiConfig.VlessFlow = "xtls-rprx-vision"
-			}
 		}
 		if node.ControllerConfig == nil {
 			node.ControllerConfig = &controller.Config{}

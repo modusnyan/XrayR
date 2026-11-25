@@ -1,0 +1,190 @@
+# ============================================================================
+#  XrayR 配置文件
+# ============================================================================
+#
+#  必填 4 个字段（都在面板后台的「节点」页面里）：
+#
+#      ApiHost    面板地址，带 http:// 或 https://，结尾不要加 /
+#      ApiKey     节点密钥 / token
+#      NodeID     节点 ID
+#      NodeType   协议：V2ray / Vmess / Vless / Trojan / Shadowsocks
+#
+#  VLESS 节点建议再加一行 EnableVless: true（见 ApiConfig 里的注释）。
+#
+#  改完之后：
+#      xrayr check     校验配置
+#      xrayr start     启动
+#      xrayr menu      打开管理菜单
+#
+#  下面是「最小可用 + 常用可选项」。完整字段说明：
+#    https://github.com/Activity163/XrayR/blob/master/release/config/config.full.yml
+#    https://github.com/Activity163/XrayR/blob/master/docs/configuration.md
+# ============================================================================
+
+ConfigVersion: 1
+
+Log:
+  Level: warning          # none / error / warning / info / debug；排查问题时改成 debug
+  Format: text            # text 或 json
+#  AccessPath: /etc/XrayR/access.log   # 访问日志，留空表示不写文件
+#  ErrorPath: /etc/XrayR/error.log     # 错误日志，留空表示输出到 stderr
+
+Nodes:
+  # --------------------------------------------------------------------------
+  # 节点 1 —— 下面 4 行必须改成你自己的
+  # --------------------------------------------------------------------------
+  - PanelType: "Xboard"                     # 面板类型，见文末说明
+    ApiConfig:
+      ApiHost: "https://panel.example.com"  # ← 改这里：面板地址
+      ApiKey: "CHANGE_ME"                   # ← 改这里：节点密钥
+      NodeID: 1                             # ← 改这里：节点 ID
+      NodeType: Vmess                       # ← 改这里：协议
+      Timeout: 30                           # 面板请求超时（秒）
+#      EnableVless: true                     # VLESS 节点建议打开：读取 network_settings 里的 path / serviceName
+#      SpeedLimit: 0                         # 覆盖面板限速（Mbps），0 = 不覆盖
+#      DeviceLimit: 0                        # 覆盖面板设备数，0 = 不覆盖
+#      RuleListPath:                         # 本地审计规则文件，与面板规则合并
+
+    ControllerConfig:
+      ListenIP: 0.0.0.0                     # 监听地址，一般不用改
+      UpdatePeriodic: 60                    # 多久同步一次面板（秒），不建议低于 30
+
+# ============================================================================
+#  以下是可选配置。
+#
+#  注释里写的就是真实缩进，启用时**只删掉行首的 #**，不要动后面的空格。
+# ============================================================================
+#
+# ----------------------------------------------------------------------------
+#  节点内可选配置（缩进 6 空格，和上面的 ListenIP 同级）
+#
+#  这一段必须留在「顶层可选配置」之前 —— 顶层键是 0 缩进，会结束 Nodes 列表，
+#  之后再来 6 缩进的行会报错。
+#
+#  关于 EnableDNS：它控制出站（freedom）的域名解析策略 —— 关闭时固定 Asis，
+#  开启后按 DNSType 解析。它和 dns.json 无关；dns.json 由文末的 DnsConfigPath
+#  指定，配了就始终生效。
+# ----------------------------------------------------------------------------
+#
+#      SendIP: 0.0.0.0                # 出站使用的源 IP
+#      EnableDNS: false               # 出站域名解析策略开关
+#      DNSType: AsIs                  # AsIs / UseIP / UseIPv4 / UseIPv6
+#
+#      EnableProxyProtocol: false     # 从 PROXY protocol 取真实来源 IP（TCP / WS 传输层）
+#      DisableGetRule: false          # 不同步面板下发的审计规则
+#      DisableUploadTraffic: false    # 不上报流量（只统计不回传）
+#      DisableSniffing: false         # 关闭域名嗅探
+#      DisableCoreHeartbeat: false    # 关闭内核心跳探测（连续失败 3 次会退出交给 systemd 重启）
+#
+#      AutoSpeedLimitConfig:          # 超速自动限速
+#        Limit: 0                     # 触发阈值（Mbps），0 为关闭
+#        WarnTimes: 0                 # 警告几次后才限速，0 为立即限速
+#        LimitSpeed: 0                # 限速后的速度（Mbps）
+#        LimitDuration: 0             # 限速持续多少分钟
+#
+#      GlobalDeviceLimitConfig:       # 跨节点的全局设备数限制（需要 Redis）
+#        Enable: false
+#        RedisNetwork: tcp            # tcp 或 unix
+#        RedisAddr: 127.0.0.1:6379
+#        RedisUsername:
+#        RedisPassword: YOUR_PASSWORD
+#        RedisDB: 0
+#        Timeout: 5
+#        Expiry: 60
+#
+# ----------------------------------------------------------------------------
+#  REALITY
+#
+#  默认跟随面板：Xboard 节点把 TLS 类型选成 2，dest / server_name / private_key /
+#  short_id 会随节点配置一起下发，这里一个字都不用写。
+#
+#  下面这段只是兜底，仅当面板没有把节点描述成 REALITY 时才生效。
+# ----------------------------------------------------------------------------
+#
+#      EnableREALITY: false           # 面板未提供 REALITY 时，用本地参数补一个
+#      REALITYConfigs:
+#        Show: true                   # 打印 REALITY 调试日志
+#        Dest: "www.amazon.com:443"   # 回落目标，必须与客户端一致
+#        ProxyProtocolVer: 0          # 0 表示不发送 PROXY protocol
+#        ServerNames:
+#          - www.amazon.com
+#        PrivateKey: YOUR_PRIVATE_KEY # 用 `XrayR x25519` 生成
+#        MinClientVer:                # 可选，x.y.z
+#        MaxClientVer:                # 可选，x.y.z
+#        MaxTimeDiff: 0               # 可选，允许的客户端时间差（毫秒）
+#        ShortIds:
+#          - ""
+#          - 0123456789abcdef
+#      DisableLocalREALITYConfig: false  # true = 连兜底也不用，始终跟随面板
+#
+#      CertConfig:                    # TLS 证书；REALITY 节点不需要
+#        CertMode: dns                # none / file / http / tls / dns；none 表示不启用 TLS
+#        CertDomain: "node1.example.com"
+#        CertFile: /etc/XrayR/cert/node1.example.com.cert   # CertMode 为 file 时使用
+#        KeyFile: /etc/XrayR/cert/node1.example.com.key
+#        Provider: cloudflare         # 完整列表见 https://go-acme.github.io/lego/dns/
+#        Email: you@example.com
+#        RejectUnknownSni: false      # 拒绝 SNI 与证书不匹配的握手
+#        DNSEnv:                      # DNS provider 所需的凭据
+#          CF_API_EMAIL: you@example.com
+#          CF_API_KEY: YOUR_CLOUDFLARE_API_KEY
+#
+#      EnableFallback: false          # 回落，仅 Trojan 与 VLESS 支持
+#      FallBackConfigs:
+#        - SNI:                       # 留空表示任意
+#          Alpn:
+#          Path:
+#          Dest: 80                   # 必填
+#          ProxyProtocolVer: 0
+
+# ----------------------------------------------------------------------------
+#  顶层可选配置（和 ConfigVersion / Log / Nodes 同级，缩进 0）
+#
+#  这一段的 # 后面没有空格，取消注释时只删掉 # 本身即可 —— 顶层键必须在第 0 列，
+#  多一个空格就会报 "did not find expected key"。
+# ----------------------------------------------------------------------------
+#
+#ConnectionConfig:                # 连接超时与缓冲区，一般保持默认
+#  Handshake: 4                   # 握手超时（秒）
+#  ConnIdle: 30                   # 连接空闲超时（秒）
+#  UplinkOnly: 2                  # 上行关闭后的等待时间（秒）
+#  DownlinkOnly: 4                # 下行关闭后的等待时间（秒）
+#  BufferSize: 64                 # 每条连接的内部缓冲（kB）
+#
+#Cache:                           # 面板不可用时的本地快照
+#  Enable: true                   # 默认开启
+#  Path: /etc/XrayR/cache         # 目录需要存在
+#  MaxAge: 86400                  # 快照有效期（秒）
+#
+#Diagnostics:                     # 诊断端点与 Prometheus 指标，默认关闭
+#  Enable: false
+#  Listen: 127.0.0.1:8080         # /healthz /readyz /status /metrics
+#
+#DnsConfigPath: /etc/XrayR/dns.json              # 见 https://xtls.github.io/config/dns.html
+#RouteConfigPath: /etc/XrayR/route.json          # 见 https://xtls.github.io/config/routing.html
+#InboundConfigPath: /etc/XrayR/custom_inbound.json
+#OutboundConfigPath: /etc/XrayR/custom_outbound.json
+
+# ============================================================================
+#  面板类型 PanelType 可选值
+# ============================================================================
+#   Xboard / NewV2board / V2board   （三者等价，推荐写 Xboard）
+#
+#  本版本只支持 Xboard。写错不会静默失败：启动时会提示最接近的候选名称。
+#
+# ============================================================================
+#  协议 NodeType 可选值
+# ============================================================================
+#   V2ray                 VMess（EnableVless: true 时走 VLESS）
+#   Vmess / Vless         显式指定
+#   Trojan
+#   Shadowsocks
+#
+#  注意：不是每个面板都支持全部协议，写错了启动时会明确报错。
+#
+# ============================================================================
+#  需要第二个节点？
+# ============================================================================
+#  把上面「节点 1」整块复制到 Nodes: 下面（和现有节点同级，即 2 空格 +
+#  "- PanelType:"），改好 ApiHost / ApiKey / NodeID / NodeType 即可。
+#  一个 XrayR 实例可以同时对接多个面板、多个节点，不需要启动多个进程。

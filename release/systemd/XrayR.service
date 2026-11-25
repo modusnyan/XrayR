@@ -1,0 +1,24 @@
+[Unit]
+Description=XrayR backend node
+Documentation=https://github.com/XrayR-project/XrayR
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/etc/XrayR
+# Validate the configuration before every start and restart so a broken file
+# never leaves a half-running node behind.
+# The service binary lives outside PATH because both `xrayr` and `XrayR` in
+# /usr/local/bin are the management command.
+ExecStartPre=/usr/local/lib/xrayr/XrayR config check -c /etc/XrayR/config.yml
+ExecStart=/usr/local/lib/xrayr/XrayR -c /etc/XrayR/config.yml
+Restart=always
+RestartSec=5
+LimitNOFILE=1048576
+# XrayR resolves geoip:/geosite: rules relative to the configuration directory.
+Environment=XRAY_LOCATION_ASSET=/etc/XrayR
+
+[Install]
+WantedBy=multi-user.target

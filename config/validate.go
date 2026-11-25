@@ -13,6 +13,20 @@ import (
 
 var realityShortIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{1,16}$`)
 
+// The values the installed template ships with. They are syntactically valid, so
+// they can only be caught by name.
+const (
+	templatePanelHost = "https://panel.example.com"
+	templateAPIKey    = "CHANGE_ME"
+)
+
+// isTemplatePlaceholder reports whether value is still the placeholder from the
+// installed template. A trailing slash is ignored so the check survives the
+// advice in the template's own comments.
+func isTemplatePlaceholder(value, placeholder string) bool {
+	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(value), "/"), placeholder)
+}
+
 // Validate performs local checks only and returns every issue found.
 func Validate(cfg *panel.Config) []Issue {
 	issues := make([]Issue, 0)
@@ -74,6 +88,15 @@ func Validate(cfg *panel.Config) []Issue {
 		}
 		if strings.TrimSpace(apiConfig.Key) == "" {
 			issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ApiConfig.ApiKey", Message: "ApiKey cannot be empty", Suggestion: "copy the node API key from the panel"})
+		}
+		// The installed template ships with these two placeholders. They parse as
+		// perfectly valid values, so without this the node starts and only fails
+		// later with a connection error against a host that does not exist.
+		if isTemplatePlaceholder(apiConfig.APIHost, templatePanelHost) {
+			issues = append(issues, Issue{Severity: SeverityWarning, Path: prefix + ".ApiConfig.ApiHost", Message: "ApiHost is still the template's example panel", Suggestion: "replace it with the panel address from the node page"})
+		}
+		if isTemplatePlaceholder(apiConfig.Key, templateAPIKey) {
+			issues = append(issues, Issue{Severity: SeverityWarning, Path: prefix + ".ApiConfig.ApiKey", Message: "ApiKey is still the template placeholder", Suggestion: "copy the node API key from the panel"})
 		}
 		if apiConfig.NodeID <= 0 {
 			issues = append(issues, Issue{Severity: SeverityError, Path: prefix + ".ApiConfig.NodeID", Message: "NodeID must be greater than zero"})

@@ -115,7 +115,8 @@ func init() {
 		}
 
 		if err := core.RequireFeatures(ctx, func(om outbound.Manager, router routing.Router, pm policy.Manager, sm stats.Manager, dc dns.Client) error {
-			core.OptionalFeatures(ctx, func(fdns dns.FakeDNSEngine) {
+			// The fake-DNS engine is optional; the dispatcher works without it.
+			_ = core.OptionalFeatures(ctx, func(fdns dns.FakeDNSEngine) {
 				d.fdns = fdns
 			})
 			// Initialize the official dispatcher with an empty config
@@ -190,10 +191,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		bucket, ok, reject := d.Limiter.GetUserBucket(sessionInbound.Tag, user.Email, sessionInbound.Source.Address.IP().String())
 		if reject {
 			errors.LogWarning(ctx, "Devices reach the limit: ", user.Email)
-			common.Close(outboundLink.Writer)
-			common.Close(inboundLink.Writer)
-			common.Interrupt(outboundLink.Reader)
-			common.Interrupt(inboundLink.Reader)
+			// Teardown of a rejected connection is best-effort.
+			_ = common.Close(outboundLink.Writer)
+			_ = common.Close(inboundLink.Writer)
+			_ = common.Interrupt(outboundLink.Reader)
+			_ = common.Interrupt(inboundLink.Reader)
 			return nil, nil, newError("Devices reach the limit: ", user.Email)
 		}
 		if ok {
@@ -258,7 +260,9 @@ func (d *DefaultDispatcher) shouldOverride(ctx context.Context, result SniffResu
 // Dispatch implements routing.Dispatcher.
 func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destination) (*transport.Link, error) {
 	if !destination.IsValid() {
-		panic("Dispatcher: Invalid destination.")
+		// Returning an error keeps a malformed destination from crashing the whole
+		// node; the connection is dropped instead.
+		return nil, errors.New("dispatcher: invalid destination")
 	}
 	outbounds := session.OutboundsFromContext(ctx)
 	if len(outbounds) == 0 {
@@ -415,9 +419,9 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	if sessionInbound.User != nil {
 		if d.RuleManager.Detect(sessionInbound.Tag, destination.String(), sessionInbound.User.Email) {
 			errors.LogError(ctx, fmt.Sprintf("User %s access %s reject by rule", sessionInbound.User.Email, destination.String()))
-			newError("destination is reject by rule")
-			common.Close(link.Writer)
-			common.Interrupt(link.Reader)
+			_ = newError("destination is reject by rule")
+			_ = common.Close(link.Writer)
+			_ = common.Interrupt(link.Reader)
 			return
 		}
 	}
@@ -433,8 +437,8 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			handler = h
 		} else {
 			errors.LogError(ctx, "non existing tag for platform initialized detour: ", forcedOutboundTag)
-			common.Close(link.Writer)
-			common.Interrupt(link.Reader)
+			_ = common.Close(link.Writer)
+			_ = common.Interrupt(link.Reader)
 			return
 		}
 	} else if d.router != nil {
@@ -463,8 +467,8 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 
 	if handler == nil {
 		errors.LogInfo(ctx, "default outbound handler not exist")
-		common.Close(link.Writer)
-		common.Interrupt(link.Reader)
+		_ = common.Close(link.Writer)
+		_ = common.Interrupt(link.Reader)
 		return
 	}
 

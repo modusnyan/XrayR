@@ -190,11 +190,14 @@ func generatePrivateKey(file string, keyType certcrypto.KeyType) (crypto.Private
 	if err != nil {
 		return nil, err
 	}
-	defer certOut.Close()
-
-	pemKey := certcrypto.PEMBlock(privateKey)
-	err = pem.Encode(certOut, pemKey)
-	if err != nil {
+	// Close explicitly instead of deferring: a close failure means the key may
+	// not have reached disk, and reporting that as success would surface later
+	// as an unreadable private key.
+	if err := pem.Encode(certOut, certcrypto.PEMBlock(privateKey)); err != nil {
+		_ = certOut.Close()
+		return nil, err
+	}
+	if err := certOut.Close(); err != nil {
 		return nil, err
 	}
 

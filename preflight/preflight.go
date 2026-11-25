@@ -131,7 +131,7 @@ func checkNetwork(ctx context.Context, prefix, rawURL string, timeout time.Durat
 	} else {
 		tcp.Status = StatusOK
 		tcp.Detail = "connection established"
-		connection.Close()
+		_ = connection.Close()
 	}
 	results = append(results, tcp)
 	if parsed.Scheme == "https" {
@@ -151,7 +151,8 @@ func checkTLS(ctx context.Context, prefix, host, port string, timeout time.Durat
 		result.Suggestion = "check certificate validity and hostname"
 		return result
 	}
-	defer connection.Close()
+	// The handshake already succeeded; a close failure changes nothing.
+	defer func() { _ = connection.Close() }()
 	state := connection.(*tls.Conn).ConnectionState()
 	if len(state.PeerCertificates) == 0 {
 		result.Status = StatusError
@@ -205,7 +206,8 @@ func checkRedis(ctx context.Context, prefix, network, address, username, passwor
 		network = "tcp"
 	}
 	client := redis.NewClient(&redis.Options{Network: network, Addr: address, Username: username, Password: password, DB: db, DialTimeout: timeout})
-	defer client.Close()
+	// The probe result is already captured by Ping; a close failure adds nothing.
+	defer func() { _ = client.Close() }()
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	err := client.Ping(checkCtx).Err()

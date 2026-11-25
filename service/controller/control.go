@@ -101,12 +101,8 @@ func (c *Controller) addUsers(users []*protocol.User, tag string) error {
 		// Pre-register per-user traffic counters so core can increment them (downlink/uplink)
 		uName := "user>>>" + mUser.Email + ">>>traffic>>>uplink"
 		dName := "user>>>" + mUser.Email + ">>>traffic>>>downlink"
-		if _, _ = stats.GetOrRegisterCounter(c.stm, uName); true {
-			// no-op
-		}
-		if _, _ = stats.GetOrRegisterCounter(c.stm, dName); true {
-			// no-op
-		}
+		_, _ = stats.GetOrRegisterCounter(c.stm, uName)
+		_, _ = stats.GetOrRegisterCounter(c.stm, dName)
 	}
 	return nil
 }
@@ -177,6 +173,9 @@ func (c *Controller) DeleteInboundLimiter(tag string) error {
 }
 
 func (c *Controller) GetOnlineDevice(tag string) (*[]api.OnlineUser, error) {
+	if c.dispatcher == nil || c.dispatcher.Limiter == nil {
+		return nil, fmt.Errorf("limiter is not initialised")
+	}
 	return c.dispatcher.Limiter.GetOnlineDevice(tag)
 }
 

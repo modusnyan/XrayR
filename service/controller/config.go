@@ -20,6 +20,7 @@ type Config struct {
 	EnableFallback            bool                             `mapstructure:"EnableFallback" json:"EnableFallback" yaml:"EnableFallback"`
 	DisableIVCheck            bool                             `mapstructure:"DisableIVCheck" json:"DisableIVCheck" yaml:"DisableIVCheck"`
 	DisableSniffing           bool                             `mapstructure:"DisableSniffing" json:"DisableSniffing" yaml:"DisableSniffing"`
+	DisableCoreHeartbeat      bool                             `mapstructure:"DisableCoreHeartbeat" json:"DisableCoreHeartbeat" yaml:"DisableCoreHeartbeat"`
 	AutoSpeedLimitConfig      *AutoSpeedLimitConfig            `mapstructure:"AutoSpeedLimitConfig" json:"AutoSpeedLimitConfig,omitempty" yaml:"AutoSpeedLimitConfig,omitempty"`
 	GlobalDeviceLimitConfig   *limiter.GlobalDeviceLimitConfig `mapstructure:"GlobalDeviceLimitConfig" json:"GlobalDeviceLimitConfig,omitempty" yaml:"GlobalDeviceLimitConfig,omitempty"`
 	FallBackConfigs           []*FallBackConfig                `mapstructure:"FallBackConfigs" json:"FallBackConfigs,omitempty" yaml:"FallBackConfigs,omitempty"`
